@@ -1,9 +1,3 @@
----
-title: "Final assignment 7040"
-author: "Mengyu Sun u7460189"
-date: "2022/5/25"
-output: html_document
----
 
 ###Ken-Behrenia City Housing Sales Report
 ```{r setup, include=FALSE}
