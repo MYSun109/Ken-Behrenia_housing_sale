@@ -1,0 +1,2522 @@
+---
+title: "Final assignment 7040"
+author: "Mengyu Sun u7460189"
+date: "2022/5/25"
+output: html_document
+---
+
+###Ken-Behrenia City Housing Sales Report
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(GGally)
+library(boot)
+library(MASS)
+library(caret)
+library(faraway)
+library(class)
+library(glmnet)
+library(leaps)
+library(pls)
+library(corrplot)
+library(ggcorrplot)
+library(tree)
+library(randomForest)
+library(splines)
+library(gam)
+library(plotrix)
+```
+
+```{r}
+PriceData <- read.csv("samplePrice.csv", na.strings="", header=TRUE)
+SentData <- read.csv("sampleSent.csv", na.strings="", header=TRUE)
+trainData <- read.csv("train.csv", na.strings="", header=TRUE)
+testData <- read.csv("test.csv", na.strings="", header=TRUE)
+```
+# Introduction
+This report focuses on research and analysis of home sales data in the Australian virtual city of Ken-Behrenia, and models and predicts home sale prices and satisfaction scores(0 or 1) recorded six months after purchase, respectively.
+#EDA
+The training dataset contains 30,000 observations, where each observation is a unique house(with a unique case identifier[id]) that was sold in this virtual city. This dataset documents characteristics related to home sales data in the city, with two response variables: standard house sale price[price Y1] and the satisfaction scores(0 or 1) recorded six months after purchase[sent Y2]; and with 12 independent variables(covariates) , the condition Estimated score of the house before sale[cond], the year the house was sold[year] and the decade it was built[built], the house’s scaled latitude[lat] and longitude[lon], and the house’s living space square meters[sq.m.h], lot square meters[sq.m.block], pool square meters[sq.m.pool], whether the house was renovated before it sold[reno with 0 and 1], the number of [bedrooms], the number of [bathrooms] , and the score for the density of population in this city[environ].
+
+A brief look at the data reveals that many of the data were originally in "chr" format, which makes subsequent analysis and modeling of these numerical variables impossible. Therefore, we need to change the type of the corresponding variable first.
+```{r}
+head(PriceData)
+head(SentData)
+head(trainData)
+head(testData)
+summary(trainData)
+nrow(trainData)
+```
+Specifically, we change the type of variables [cond],[year],[built],[lat],[lon],[sq.m.h],[sq.m.block],[sq.m.pool],[reno],[bedrooms],[bathrooms] and [environ] from character to numeric, so as to carry out the next step of graphing, numerical analysis and modelling.
+For the test dataset, we also do the same transformation.
+```{r}
+trainData$cond <- as.numeric(trainData$cond)
+trainData$year <- as.numeric(trainData$year)
+trainData$built <- as.numeric(trainData$built)
+trainData$lat <- as.numeric(trainData$lat)
+trainData$lon <- as.numeric(trainData$lon)
+trainData$sq.m.h <- as.numeric(trainData$sq.m.h)
+trainData$sq.m.block <- as.numeric(trainData$sq.m.block)
+trainData$sq.m.pool <- as.numeric(trainData$sq.m.pool)
+#trainData$reno <- as.logical(trainData$reno)
+trainData$reno <- as.numeric(trainData$reno)
+trainData$bedrooms <- as.numeric(trainData$bedrooms)
+trainData$bathrooms <- as.numeric(trainData$bathrooms)
+trainData$environ <- as.numeric(trainData$environ)
+head(trainData)
+```
+#same for test dataset.
+```{r}
+testData$cond <- as.numeric(testData$cond)
+testData$year <- as.numeric(testData$year)
+testData$built <- as.numeric(testData$built)
+testData$lat <- as.numeric(testData$lat)
+testData$lon <- as.numeric(testData$lon)
+testData$sq.m.h <- as.numeric(testData$sq.m.h)
+testData$sq.m.block <- as.numeric(testData$sq.m.block)
+testData$sq.m.pool <- as.numeric(testData$sq.m.pool)
+#testData$reno <- as.logical(testData$reno)
+testData$reno <- as.numeric(testData$reno)
+testData$bedrooms <- as.numeric(testData$bedrooms)
+testData$bathrooms <- as.numeric(testData$bathrooms)
+testData$environ <- as.numeric(testData$environ)
+head(testData)
+```
+
+After data preprocessing, we can find from the summary statistics table that:
+[sent] and [reno] variable are both logical variables (also called Boolean values or categorical variables with two types)
+variable [price],[cond],[lat],[lon],[sq.m.h],[sq.m.block],[sq.m.pool],[bedrooms] and [bathrooms] are continuous variables.
+[year], [built] and [environ] may potentially be considered as continuous variables.
+The remaining variables are [id], which are text information with great uniqueness, so they are 
+not qualified for regression.Therefore, [id] will not be used as regression variables in the later model variables selections.
+```{r}
+summary(trainData)
+```
+#deal with NA
+Next, let us focus on the missing value.
+According to the information in the summary output, we can find that there are some missing values in the training dataset. Because about five hundred missing values are relatively small compared to the total observed value of 30,000. Therefore, here I choose to use a single imputation method.
+```{r}
+summary(trainData)
+colSums(is.na(trainData))
+```
+For variables with missing values, I did some simple imputation with 0, mean or median.
+For the [reno] variable, we can find in the summary data that most of the houses have not been renovated, so we make all missing value of the reno variables equal to 0.
+For the variables[year],[built],[bedrooms],[bathrooms],[environ], we can find that it is all integers, and the mean and median of these variables are similar, so I choose to use the median to fill the missing values.
+For two variables [sq.m.block] and [sq.m.pool], we can find that these areas are very different, where the maximum value is much larger than the value of the third quantile, so we can judge that these data have large extreme values. In this case, if the mean of the variable is used for filling, it will be affected by extreme values and not accurate enough. Therefore, in order to exclude the interference of extreme values, I choose to fill in the median.
+For the missing values for the remaining variables[cond], [lat], [lon] and [sq.m.h], I'll just fill in the mean value.
+For test dataset, we use the same method to deal with the NA's.
+[limitation of single imputation] There are still some limitations to this method, because we only fill in the NA's with 0, mean or median, which may change the data characteristics of the original data set, such as the coefficients and significance of some variables in the fitted model may change. At the same time, the bias introduced by fill-in method may be large and may not be compensated by subsequent variance reduction. Therefore, it is not appropriate to use a single imputation if the missing values accounts for a large proportion.
+But here, we find that 500/30000 is about 1.67%, which is relatively small, so I still choose to use the single imputation method.
+```{r}
+trainData$cond[is.na(trainData$cond)]=0.0271 #mean
+trainData$year[is.na(trainData$year)]=7 #median
+trainData$built[is.na(trainData$built)]=5 #median
+trainData$lat[is.na(trainData$lat)]=-0.0516 #mean
+trainData$lon[is.na(trainData$lon)]=-0.0841 #mean
+trainData$sq.m.h[is.na(trainData$sq.m.h)]=214.1 #mean
+trainData$sq.m.block[is.na(trainData$sq.m.block)]=722 #median
+trainData$sq.m.pool[is.na(trainData$sq.m.pool)]=20.00 #median
+trainData$reno[is.na(trainData$reno)]=0
+trainData$bedrooms[is.na(trainData$bedrooms)]=3.000 #median
+trainData$bathrooms[is.na(trainData$bathrooms)]=2.00 #median
+trainData$environ[is.na(trainData$environ)]=1.000 #median
+colSums(is.na(trainData))
+```
+
+```{r}
+
+summary(testData)
+colSums(is.na(testData))
+```
+
+```{r}
+testData$cond[is.na(testData$cond)]=0.03272 #mean
+testData$year[is.na(testData$year)]=7 #median
+testData$built[is.na(testData$built)]=5 #median
+testData$lat[is.na(testData$lat)]=-0.08266 #mean
+testData$lon[is.na(testData$lon)]=-0.1139 #mean
+testData$sq.m.h[is.na(testData$sq.m.h)]=215  #mean
+testData$sq.m.block[is.na(testData$sq.m.block)]=714.0 #median
+testData$sq.m.pool[is.na(testData$sq.m.pool)]=21.00 #median
+testData$reno[is.na(testData$reno)]=0
+testData$bedrooms[is.na(testData$bedrooms)]=3.000 #median
+testData$bathrooms[is.na(testData$bathrooms)]=2.00 #median
+testData$environ[is.na(testData$environ)]=1.000 #median
+colSums(is.na(testData))
+```
+
+[correlations]
+```{r}
+cor(trainData[c(2:15)])
+```
+
+correlation plot
+```{r}
+correlations <- cor(trainData)
+corrplot(correlations)
+ggcorrplot(correlations)
+findCorrelation(x=correlations, cutoff = .7, names=TRUE)
+```
+According to the correlation table and plot, we can find that variable [lat] and [lon] have the largest correlation (0.808033179), which means that there is a strong positive relationship between lat and lon.
+Also, we can find the correlation between sq.m.h and bathrooms is also very large (0.71294186). This means that there is a strong positive relationship between sq.m.h and bathrooms, or we can say these two variables are quite highly correlated.
+Since the two correlations between [lat] and [lon],between [sq.m.h] and [bathrooms] are too large, I will consider using the interaction of these variables in later modeling.
+For correlation coefficients less than 0.7 and larger than 0,3, we can find that they also have a certain correlation. Therefore, for the interaction between these variables, we will conduct further analysis and verification in subsequent modeling and plots. [for example,correlation between built and cond is -0.361340469, which mean that there is a negative relationship between them.]
+For correlation coefficients less than 0.3, we temporarily ignore the interaction between them.
+For the response variable price, we can find that the correlation coefficient between price and year      (-0.487769734),sq.m.h(0.575937788),bathrooms(0.444325499) are relatively large, which is useful for variable selection in our subsequent modeling, that is, we can consider these variables first in the modeling.
+For the response variable sent, we can find that the correlation coefficient between sent and sq.m.h    (0.370216586),bathrooms(0.264574127) are relatively large, which is useful for variable selection in our subsequent modeling, that is, we can consider these variables first in the modeling.
+
+[univariate plot]
+```{r}
+par(mfrow=c(4,4)) 
+hist(trainData$price, xlab="price")
+hist(trainData$sent, xlab="sent")#bool
+hist(trainData$cond, xlab="Cond")
+hist(trainData$year, xlab="year")
+hist(trainData$built,xlab="built")
+hist(trainData$lat, xlab="lat")
+hist(trainData$lon, xlab="lon")
+hist(trainData$sq.m.h, xlab="sq.m.h")
+hist(trainData$sq.m.block, xlab="sq.m.block")
+hist(trainData$sq.m.pool, xlab="sq.m.pool")
+trainData$reno <- as.numeric(trainData$reno)
+hist(trainData$reno, xlab="reno")#bool value
+hist(trainData$bedrooms, xlab="bedrooms")
+hist(trainData$bathrooms, xlab="bathrooms")
+hist(trainData$environ, xlab="environ")
+```
+According to the univariate plot, we can find that the plot of price looks approximately normal, so we will not do log transformation for price.
+For the sent variable, we can find most house buyer are somewhat or not satisfied with there house after 6 months of buying.
+For reno, we can find most houses are not been renovated.
+Also, we can find that variables sq.m.h, sq.m.block, sq.m.pool, and environ are quite right skewed, we can consider to do some log transformation.
+We can find the variable cond and bathrooms looks only somewhat right skewed, we will not do log transformation for it.
+For variable year, we can find smallest number of houses was sold in year 3. 
+For built, we can find largest number of houses was built in year 5, whereas smallest number of houses was built in year 9. 
+For lat and lon, we can find that the data are mainly concentrated in the two sides. For lat, the data is centered on less than -3 and greater than -2. For lon, the data is centered on less than -4, and between -1 to 1. This may be due to the fact that the latitude and longitude of the houses are all similar, as they are all in the same virtual city in Australia.
+For variables year,built,lat and lon, it can be seen from the plot that they do not need log transformation, and other related transformations can be discussed in detail in subsequent modeling.
+For bedrooms, it looks quite normal, so we do not need the log transformation.
+Let us see the plot of log transformation for variable 
+```{r}
+#swim pool have so many 0, cannot use log transformation
+#make some log transformation
+par(mfrow=c(2,2)) 
+hist(log(trainData$sq.m.h), xlab="sq.m.h")
+hist(log(trainData$sq.m.block), xlab="sq.m.block")
+hist(log(trainData$sq.m.pool), xlab="sq.m.pool")
+hist(log(trainData$environ), xlab="environ")
+```
+we can find the log transformation for sq.m.h and sq.m.block looks quite good, so we just use this log transformation for the modeling later.
+For variable sq.m.pool, we can find that there are a large number of 0s in the original data. Since the log transformation requires that it is not 0, if there are a large number of 0s, the result will be inaccurate. Therefore, for sq.m.pool, I will not use log transformation, and other transformations will be in discussed in specific models. For variable environ, it can be found that the log transformation has little effect, so the log transformation is still not applicable, and other transformation will be discussed further in the model.
+
+According to the plot, we can find there is no need to do the log transformation for price,which is the same result as before.
+```{r}
+par(mfrow=c(1,2)) 
+plot(trainData$price, xlab="price")
+plot(log(trainData$price), xlab="price")
+```
+
+[plots of X vs. Y, and bivariate plots]
+[For price]
+```{r}
+par(mfrow=c(4,4))
+plot(trainData$cond,trainData$price,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$year,trainData$price,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$built,trainData$price,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$lat,trainData$price,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$lon,trainData$price,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sq.m.h,trainData$price,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sq.m.block,trainData$price,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sq.m.pool,trainData$price,pch=16, col="blue", cex.lab=1.5)
+#plot(trainData$price,trainData$reno,pch=16, col="blue", cex.lab=1.5)
+boxplot(price~reno,data=trainData)
+plot(trainData$bedrooms,trainData$price,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$bathrooms,trainData$price,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$environ,trainData$price,pch=16, col="blue", cex.lab=1.5)
+plot(log(trainData$sq.m.h),trainData$price,pch=16, col="blue", cex.lab=1.5)
+plot(log(trainData$sq.m.block),trainData$price,pch=16, col="blue", cex.lab=1.5)
+```
+From the graph we can see that there is no obvious quadratic and cubic relationship between these covariates and price, but we can see that some variables have nonlinear relationship.
+For cond and built vs price, looks no significant non-linearity.The data mainly floats up and down 1.
+For year, may have some non-linearity but not too much. And we can find there is a slightly negative relationship between year and price.
+for lat ,lon, sq.m.block, we can see that there may be a non-linear relationship, which we will analyze further in a later model.
+For sq.m.h and sq.m.pool, we can find there is a positive relationship between year.(may also have some non-linearity)
+for reno, we can find there is no significant difference in price for house with or without being renovated, and houses had been renovated (reno=1) have a little higher price.
+For bedrooms and bathrooms, we can find there is a positive relationship between price.(maybe linear or non-linear, we should have more discuss later).
+For environ, it looks no significant non-linearity.The data mainly floats up and down 1.
+For log transformed sq.m.h, there is a strong positive relation between log(sq.m.h) and price.(also may have some non-linearity)
+For log(sq.m.block), we can find that there may be a non-linear relationship.(with slightly positive relationship)
+
+we can also find some obvious outliers in plot sq.m.h, sq.m.block and sq.m.pool.
+we can see them on the summary table.
+```{r}
+summary(trainData$sq.m.h)
+summary(trainData$sq.m.block)
+summary(trainData$sq.m.pool)
+```
+
+We can find that these variables do have outliers, that is, the maximum value is much larger than the other values. For sq.m.h, the maximum outlier is 2078.0 square meter. For sq.m.block, the maximum outlier is 243263 square meter. For sq.m.pool, there are 2 ouliers greater than 250 square meter,and the maximum outlier is 350.00 square meter.
+Understanding these outliers will help us in our subsequent modeling analysis.
+
+Here we are only making preliminary graphic judgments, and further verification is required when building the model below.
+[for sent]
+```{r}
+par(mfrow=c(4,4))
+plot(trainData$sent,trainData$cond,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sent,trainData$year,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sent,trainData$built,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sent,trainData$lat,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sent,trainData$lon,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sent,trainData$sq.m.h,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sent,trainData$sq.m.block,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sent,trainData$sq.m.pool,pch=16, col="blue", cex.lab=1.5)
+#plot(trainData$sent,trainData$reno,pch=16, col="blue", cex.lab=1.5)
+boxplot(reno~sent,data=trainData)
+plot(trainData$sent,trainData$bedrooms,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sent,trainData$bathrooms,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sent,trainData$environ,pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sent,log(trainData$sq.m.h),pch=16, col="blue", cex.lab=1.5)
+plot(trainData$sent,log(trainData$sq.m.block),pch=16, col="blue", cex.lab=1.5)
+```
+
+we can find from the plot that,
+For cond, houses with small condition score are more likely to somewhat or not satisfied with the houses 6 months after purchasing.(more likely to get sent=0)
+For year, built,lat,lon,environ and bedrooms, there is no significant difference between different sent group.
+For sq.m.h, we can find there is an outlier in sent=1, which is larger than 2000 square meter. housed with larger square meters of living space are more likely to very satisfied with the houses 6 months after purchasing.(more likely to get sent=1)
+For sq.m.block, we can find there are two outliers in sent=1 and 0, which is larger than 150000 square meter. housed with larger square meters of lot size are more likely to very satisfied with the houses 6 months after purchasing(more likely to get sent=1), without considering outliers.
+For sq.m.pool, we can find there are 3 outliers in sent=1 and 0, which is larger than 200 square meter. Also, we can find there is no significant difference in sq.m.pool between different sent group, without considering outliers.
+For reno, we can find housed with being renovated are likely to very satisfied with the houses 6 months after purchasing(more likely to get sent=1).
+For bathrooms, we can find housed with more bathrooms are more likely to very satisfied with the houses 6 months after purchasing(more likely to get sent=1).
+For log transformed sq.m.h and sq.m.block, we can find they are improved, so we can use this log transform later in modelling.
+For outliers in some variables, we found that they are consistent with those in price. Since these outliers have been analyzed in detail in price, we will not analyze them too much here.
+
+
+[add log and interaction to the dataset]
+Combining all the above results, we can find that we need to log-transform the sq.m.h and sq.m.block variables and add two interaction terms [lat:lon] and[sq.m.h:bathrooms]. To facilitate subsequent modeling, here we add four new columns [log_sq.m.h],[log_sq.m.block],[lat_lon] and [sq.m.h_bathrooms] to both the training and testing datasets. (Note that since the four variables lat,lon,sq.m.h and bathrooms are all numeric values, here I simply use "lat times lon" and "sq.m.h times bathrooms" to represent the interaction term.)
+```{r}
+trainData$log_sq.m.h <- log(trainData$sq.m.h)
+trainData$log_sq.m.block <- log(trainData$sq.m.block)
+trainData$lat_lon <- trainData$lat*trainData$lon
+trainData$sq.m.h_bathrooms <- trainData$sq.m.h*trainData$bathrooms
+head(trainData)
+colSums(is.na(trainData))
+```
+
+```{r}
+testData$log_sq.m.h <- log(testData$sq.m.h)
+testData$log_sq.m.block <- log(testData$sq.m.block)
+testData$lat_lon <- testData$lat*testData$lon
+testData$sq.m.h_bathrooms <- testData$sq.m.h*testData$bathrooms
+head(testData)
+colSums(is.na(testData))
+```
+
+
+##For Price modeling
+First, we use the a method to test the number of covariates and coefficients that the model should contain under the smallest BIC, RSS, Cp and largest adjusted r^2. Although this does not determine anything, it helps us to choose variables when building the model later.
+```{r}
+fit_fwd_p = regsubsets(price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+reno+environ+bathrooms, data = trainData, nvmax = 14, method = "forward")
+summary(fit_fwd_p)
+par(mfrow=c(2,2))
+plot(summary(fit_fwd_p)$rss, xlab="Number of Variables",
+ylab="RSS", type="l", lwd=3)
+plot(summary(fit_fwd_p)$cp, xlab="Number of Variables",
+ylab="Cp", type="l", lwd=3)
+plot(summary(fit_fwd_p)$bic, xlab="Number of Variables",
+ylab="BIC", type="l", lwd=3)
+plot(summary(fit_fwd_p)$adjr2, xlab="Number of Variables",
+ylab="Adjusted Rˆ2", type="l", lwd=3)
+```
+```{r}
+which.min(summary(fit_fwd_p)$rss)
+which.min(summary(fit_fwd_p)$cp)
+which.min(summary(fit_fwd_p)$bic)
+which.max(summary(fit_fwd_p)$adjr2)
+coef(fit_fwd_p, 10)
+```
+From the output, we can find that the minimum BIC selects the model with 10 variables(year, built, lat, lon, log(sq.m.h), log(sq.m.block), sq.m.pool, bedrooms,lat:lon and sq.m.h:bathrooms.
+minimum Cp and maximum adjuted r^2 select the model with 12 variables.
+minimum RSS select the model with 14 variables.
+We can use these results as a reference for subsequent model variable selection.
+
+#1,linear regression model without using any spline and poly 
+linear regression is a simple method to supervised learning. It assumes that the relationship between the response variable and covariates is linear. Here we use least-squares approach to estimation.
+
+First we build a model with all 14 variables as covariates, and then select variables based on their significance in the regression results.
+Under hierarchy principle, we should include the main effects if we include an interaction in a model.(although the main effects p-value is not significant)
+```{r}
+trainData$reno <- as.factor(trainData$reno)
+mod1.lm.1<-lm(price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+reno+environ+bathrooms, data=trainData)
+# under hierarchy principle, we should include the main effects if we include an interaction in a model.(although the main effects p-value is not significant)
+mod1.lm.2<-lm(price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+reno+bathrooms, data=trainData)
+mod1.lm.3<-lm(price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+bathrooms, data=trainData) #best
+
+summary(mod1.lm.1)
+summary(mod1.lm.2)
+summary(mod1.lm.3)
+```
+[backward Selection]
+model1: price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+reno+environ+bathrooms.
+we can find except for the main effects of the interaction term, the environ variable is not statistically significant and has the largest p-value 0.94521(>>0.05). So, we should delete environ variable in the model.
+we get model2: price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+reno+bathrooms
+we can find except for the main effects of the interaction term, the reno variable is not statistically significant and has the largest p-value 0.11742(>0.05). So, we should delete reno variable in the model.
+Finally, we get our best lm model: price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+bathrooms
+We can find all the p-value is much smaller than 0.05, so they all statistically significant, and we should reject the null hypothesis.(except for the main effects of the interaction term)
+For F test p-value is also <0.05, significant, so we can say this model is joint significant. (we can reject the null hypothesis that none of the covariates are important.)
+Also we can find the best model's residual standard error is 0.6539.Although it is not the smallest one, but similar as other two models.
+At the same time, we can also sort the variables according to the size of the p-value (from small to large). According to the sorted model, we can delete the environ and reno variables in turn and use the anova method for comparison.
+The anova results show that in the best model we selected above, all variables are statistically significant, which supports our above judgment.
+```{r}
+anova(mod1.lm.1) #delete environ
+anova(mod1.lm.2) #delete reno
+anova(mod1.lm.3) #same result
+```
+
+use 10-fold cross-validation to calculate the MSE for our best lm model:
+price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+bathrooms
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.p1<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+modp.lm.best<-lm(price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+bathrooms, data=data.train)
+
+pred.test.lm.p <- predict(modp.lm.best, newdata = data.test,type="response")
+y.p1 <- data.test$price
+mse.p1[k]<- mean((y.p1-pred.test.lm.p)^2)
+}
+
+mean(mse.p1)
+```
+we can find the MSE is 0.4294718.
+```{r}
+confint(mod1.lm.3,level=0.95)
+```
+According to the 95% confidence interval of the best lm model, we can find all variables are statistically significant.
+[limitation] Linear regression may be too simplistic to account for nonlinear situations. For example, in the EDA section, we found that there is a nonlinearity between price and some variables, so it is not accurate enough to only consider a linear fit. Below I will consider some non-linearities.
+
+#2, lm or gam model consider the non-linearity
+Let us first examine variables year,built,bedrooms, bathrooms and environ versus price using the local regression.
+[local regression is fitting separate linear fits over the range of X by weighted least squares, with a sliding weight function.]
+```{r}
+par(mfrow=c(2,3))
+plot(trainData$year,trainData$price, pch=16)
+mod <- loess(price ~ year,data=trainData)
+o <- order(trainData$year)
+lines(trainData$year[o], mod$fit[o], col="orange", lwd=5)
+
+plot(trainData$built,trainData$price, pch=16)
+mod1 <- loess(price ~ built,data=trainData)
+o <- order(trainData$built)
+lines(trainData$built[o], mod1$fit[o], col="orange", lwd=5)
+
+plot(trainData$bedrooms,trainData$price, pch=16)
+mod2 <- loess(price ~ bedrooms,data=trainData)
+o <- order(trainData$bedrooms)
+lines(trainData$bedrooms[o], mod2$fit[o], col="orange", lwd=5)
+
+plot(trainData$bathrooms,trainData$price, pch=16)
+mod3 <- loess(price ~ bathrooms,data=trainData)
+o <- order(trainData$bathrooms)
+lines(trainData$bathrooms[o], mod3$fit[o], col="orange", lwd=5)
+
+plot(trainData$environ,trainData$price, pch=16)
+mod4 <- loess(price ~ environ,data=trainData)
+o <- order(trainData$environ)
+lines(trainData$environ[o], mod4$fit[o], col="orange", lwd=5)
+```
+According to the plot, we can find that:
+year: there is no obvious nonlinear.
+built: There doesn’t appear to be a obviously non-linear fit. 
+environ:There doesn’t appear to be a obviously non-linear fit. 
+bedrooms:no obvious non-linear.
+bathrooms: may have some nonlinear. so we can add a natural cubic spline [ns()] to the model, we can first set df=5
+So we fir model: lm(price~ns(bathrooms,df=5), data=trainData)
+```{r}
+mod_choosedf<-lm(price~ns(bathrooms,df=5), data=trainData)
+par(mfrow=c(1,4))
+plot(mod_choosedf,col="red",cex.lab=2)
+```
+According to the plot, we can find when df=5, looks good enough, so just choose df=5.
+Then we fit two models to compare whether we should include the ns(bathrooms,df=5) term.
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.ns <- matrix(NA, 10, 2)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+mod_nons<-lm(price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+reno+environ+bathrooms, data=trainData)
+mod_ns<-lm(price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+reno+environ+ns(bathrooms,df=5), data=trainData)
+
+pred.test.nons <- predict(mod_nons, newdata = data.test,type="response")
+pred.test.ns <- predict(mod_ns, newdata = data.test,type="response")
+
+y.mod.ns <- data.test$price
+mse.ns[k,1]<- mean((y.mod.ns-pred.test.nons)^2)
+mse.ns[k,2]<- mean((y.mod.ns-pred.test.ns)^2)
+}
+apply(mse.ns, 2, mean)
+apply(mse.ns, 2, sd)
+```
+we can find the model with ns has the smallest mse.0.4239050 .so we can use ns(bathrooms,df=5) in our model.
+Then, we can select whether to add a polynomial term for lat variable.
+we fit 6 models:
+mod1 <- lm(price ~ lat,data=trainData)
+mod2 <- lm(price ~ poly(lat,2),data=trainData)
+mod3 <- lm(price ~ poly(lat,3),data=trainData)
+mod4 <- lm(price ~ poly(lat,4),data=trainData)
+mod5 <- lm(price ~ poly(lat,5),data=trainData)
+mod6 <- lm(price ~ poly(lat,6),data=trainData)
+```{r}
+#for lat
+mod1 <- lm(price ~ lat,data=trainData)
+mod2 <- lm(price ~ poly(lat,2),data=trainData)
+mod3 <- lm(price ~ poly(lat,3),data=trainData)
+mod4 <- lm(price ~ poly(lat,4),data=trainData)
+mod5 <- lm(price ~ poly(lat,5),data=trainData)
+mod6 <- lm(price ~ poly(lat,6),data=trainData)
+anova(mod1, mod2, mod3, mod4, mod5,mod6)
+```
+From the ANOVA result, we can find all models are significant.we can reject the smaller model.So, maybe we can use d=6 or 5(but it is too large). We need to calculate their MSE to make a final judgment.
+
+Using 10-fold cv to calculate their MSE:
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.lm2 <- matrix(NA, 10, 6)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+mod1 <- lm(price ~ lat,data=trainData)
+mod2 <- lm(price ~ poly(lat,2),data=data.train)
+mod3 <- lm(price ~ poly(lat,3),data=data.train)
+mod4 <- lm(price ~ poly(lat,4),data=data.train)
+mod5 <- lm(price ~ poly(lat,5),data=data.train)
+mod6 <- lm(price ~ poly(lat,6),data=data.train)
+
+pred.test.lm.mod1 <- predict(mod1, newdata = data.test,type="response")
+pred.test.lm.mod2 <- predict(mod2, newdata = data.test,type="response")
+pred.test.lm.mod3 <- predict(mod3, newdata = data.test,type="response")
+pred.test.lm.mod4 <- predict(mod4, newdata = data.test,type="response")
+pred.test.lm.mod5 <- predict(mod5, newdata = data.test,type="response")
+pred.test.lm.mod6 <- predict(mod6, newdata = data.test,type="response")
+
+y.mod <- data.test$price
+mse.lm2[k,1]<- mean((y.mod-pred.test.lm.mod1)^2)
+mse.lm2[k,2]<- mean((y.mod-pred.test.lm.mod2)^2)
+mse.lm2[k,3]<- mean((y.mod-pred.test.lm.mod3)^2)
+mse.lm2[k,4]<- mean((y.mod-pred.test.lm.mod4)^2)
+mse.lm2[k,5]<- mean((y.mod-pred.test.lm.mod5)^2)
+mse.lm2[k,6]<- mean((y.mod-pred.test.lm.mod6)^2)
+}
+mse.lm2
+apply(mse.lm2, 2, mean)
+apply(mse.lm2, 2, sd)
+#mean(mse.mod1,mse.mod2,mse.mod3,mse.mod4,mse.mod5,mse.mod6)
+#sd(mse.mod1,mse.mod2,mse.mod3,mse.mod4,mse.mod5,mse.mod6)
+#mse.sd.1<-sd(mse.1)/sqrt(k)
+```
+we can see that the smallest cross-validated MSE is for d=6, but its standard deviation is larger than d=4 or 5. Combining the reasons for parsimony, we can choose d=2 or 3, because there is a initial large drop for sd when d=2, and a large dorp for MSE when d=2(initial drop) and 3，and the values then stabilized.
+
+plots with the fits for d = 2 ,3 and 6
+```{r}
+mod2 <- lm(price ~ poly(lat,2),data=trainData)
+mod3 <- lm(price ~ poly(lat,3),data=trainData)
+mod6 <- lm(price ~ poly(lat,6),data=trainData)
+plot(trainData$lat, trainData$price, pch=16)
+o <- order(trainData$lat)
+lines(trainData$lat[o], mod2$fit[o], lwd=5, col="orange")
+lines(trainData$lat[o], mod3$fit[o], lwd=5, col="green")
+lines(trainData$lat[o], mod6$fit[o], lwd=5, col="purple")
+```
+form this plot, the d=2 and 3 did better. Therefore, I choose to use d=3 here.
+
+Just combine this poly term to our model and calculate the MSE.
+lm(price~ year+built+poly(lat,3)+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=data.train)
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.p1<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+modp.lm.best1<-lm(price~ year+built+poly(lat,3)+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=data.train)
+
+pred.test.lm.p <- predict(modp.lm.best1, newdata = data.test,type="response")
+y.p1 <- data.test$price
+mse.p1[k]<- mean((y.p1-pred.test.lm.p)^2)
+}
+
+mean(mse.p1)
+```
+we can find mse=0.3856224 (quite good). we can also find 0.3856224 is smaller than 0.4239050(mse without contain poly term). So, it is improved, we should add poly(lat,3) term.
+
+For the lon variale: similar method as lat variable.
+we firstly fit 6 models.
+mod1 <- lm(price ~ lon,data=trainData)
+mod2 <- lm(price ~ poly(lon,2),data=trainData)
+mod3 <- lm(price ~ poly(lon,3),data=trainData)
+mod4 <- lm(price ~ poly(lon,4),data=trainData)
+mod5 <- lm(price ~ poly(lon,5),data=trainData)
+mod6 <- lm(price ~ poly(lon,6),data=trainData)
+```{r}
+mod1 <- lm(price ~ lon,data=trainData)
+mod2 <- lm(price ~ poly(lon,2),data=trainData)
+mod3 <- lm(price ~ poly(lon,3),data=trainData)
+mod4 <- lm(price ~ poly(lon,4),data=trainData)
+mod5 <- lm(price ~ poly(lon,5),data=trainData)
+mod6 <- lm(price ~ poly(lon,6),data=trainData)
+anova(mod1, mod2, mod3, mod4, mod5,mod6)
+```
+From the ANOVA output, we can find model 2,3,4,5 and 6 are significant. So, we can use d=2, 4,5,6. we can just use 10-fold cv to choose the number of d.
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.lm22 <- matrix(NA, 10, 6)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+mod11 <- lm(price ~ lon,data=trainData)
+mod22 <- lm(price ~ poly(lon,2),data=trainData)
+mod33 <- lm(price ~ poly(lon,3),data=trainData)
+mod44 <- lm(price ~ poly(lon,4),data=trainData)
+mod55 <- lm(price ~ poly(lon,5),data=trainData)
+mod66 <- lm(price ~ poly(lon,6),data=trainData)
+
+pred.test.lm.mod11 <- predict(mod11, newdata = data.test,type="response")
+pred.test.lm.mod22 <- predict(mod22, newdata = data.test,type="response")
+pred.test.lm.mod33 <- predict(mod33, newdata = data.test,type="response")
+pred.test.lm.mod44 <- predict(mod44, newdata = data.test,type="response")
+pred.test.lm.mod55 <- predict(mod55, newdata = data.test,type="response")
+pred.test.lm.mod66 <- predict(mod66, newdata = data.test,type="response")
+
+y.mod1 <- data.test$price
+mse.lm22[k,1]<- mean((y.mod1-pred.test.lm.mod11)^2)
+mse.lm22[k,2]<- mean((y.mod1-pred.test.lm.mod22)^2)
+mse.lm22[k,3]<- mean((y.mod1-pred.test.lm.mod33)^2)
+mse.lm22[k,4]<- mean((y.mod1-pred.test.lm.mod44)^2)
+mse.lm22[k,5]<- mean((y.mod1-pred.test.lm.mod55)^2)
+mse.lm22[k,6]<- mean((y.mod1-pred.test.lm.mod66)^2)
+}
+apply(mse.lm22, 2, mean)
+apply(mse.lm22, 2, sd)
+```
+we can see that the smallest cross-validated MSE is for d=6, but its standard deviation is larger than d=4 or 5. Combining the reasons for parsimony, we can choose d=4, because there is a initial large drop for sd when d=4, and a large dorp for MSE when d=4(initial drop).
+
+plots with the fits for d = 1,4,5 and 6
+```{r}
+mod11 <- lm(price ~ lon,data=trainData)
+mod44 <- lm(price ~ poly(lon,4),data=trainData)
+mod55 <- lm(price ~ poly(lon,5),data=trainData)
+mod66 <- lm(price ~ poly(lon,6),data=trainData)
+plot(trainData$lon, trainData$price, pch=16)
+o <- order(trainData$lon)
+lines(trainData$lon[o], mod11$fit[o], lwd=5, col="red")
+lines(trainData$lon[o], mod44$fit[o], lwd=5, col="orange")
+lines(trainData$lon[o], mod55$fit[o], lwd=5, col="green")
+lines(trainData$lon[o], mod66$fit[o], lwd=5, col="purple")
+```
+we can find from the plot that the orange line is good enough, so we choose d=4.
+calculate the MSE using the 10-fold cv when adding poly(lon,4) term.
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.p1<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+modp.lm.best1<-lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=data.train)
+
+pred.test.lm.p <- predict(modp.lm.best1, newdata = data.test,type="response")
+y.p1 <- data.test$price
+mse.p1[k]<- mean((y.p1-pred.test.lm.p)^2)
+}
+
+mean(mse.p1)
+```
+we can find mse=0.3851932, which is better than before, so we should add poly(lon,4).
+
+For the sqm.pool variale, let us fit 6 models:
+mod1 <- lm(price ~ sq.m.pool,data=trainData)
+mod2 <- lm(price ~ poly(sq.m.pool,2),data=trainData)
+mod3 <- lm(price ~ poly(sq.m.pool,3),data=trainData)
+mod4 <- lm(price ~ poly(sq.m.pool,4),data=trainData)
+mod5 <- lm(price ~ poly(sq.m.pool,5),data=trainData)
+mod6 <- lm(price ~ poly(sq.m.pool,6),data=trainData)
+```{r}
+mod1 <- lm(price ~ sq.m.pool,data=trainData)
+mod2 <- lm(price ~ poly(sq.m.pool,2),data=trainData)
+mod3 <- lm(price ~ poly(sq.m.pool,3),data=trainData)
+mod4 <- lm(price ~ poly(sq.m.pool,4),data=trainData)
+mod5 <- lm(price ~ poly(sq.m.pool,5),data=trainData)
+mod6 <- lm(price ~ poly(sq.m.pool,6),data=trainData)
+anova(mod1, mod2, mod3, mod4, mod5,mod6)
+```
+we can find all of them are significant, so just look at the plot.
+
+use 10-fold cv to choose the number of d.
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.lm22 <- matrix(NA, 10, 6)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+mod11 <- lm(price ~ sq.m.pool,data=trainData)
+mod22 <- lm(price ~ poly(sq.m.pool,2),data=trainData)
+mod33 <- lm(price ~ poly(sq.m.pool,3),data=trainData)
+mod44 <- lm(price ~ poly(sq.m.pool,4),data=trainData)
+mod55 <- lm(price ~ poly(sq.m.pool,5),data=trainData)
+mod66 <- lm(price ~ poly(sq.m.pool,6),data=trainData)
+
+pred.test.lm.mod11 <- predict(mod11, newdata = data.test,type="response")
+pred.test.lm.mod22 <- predict(mod22, newdata = data.test,type="response")
+pred.test.lm.mod33 <- predict(mod33, newdata = data.test,type="response")
+pred.test.lm.mod44 <- predict(mod44, newdata = data.test,type="response")
+pred.test.lm.mod55 <- predict(mod55, newdata = data.test,type="response")
+pred.test.lm.mod66 <- predict(mod66, newdata = data.test,type="response")
+
+y.mod1 <- data.test$price
+mse.lm22[k,1]<- mean((y.mod1-pred.test.lm.mod11)^2)
+mse.lm22[k,2]<- mean((y.mod1-pred.test.lm.mod22)^2)
+mse.lm22[k,3]<- mean((y.mod1-pred.test.lm.mod33)^2)
+mse.lm22[k,4]<- mean((y.mod1-pred.test.lm.mod44)^2)
+mse.lm22[k,5]<- mean((y.mod1-pred.test.lm.mod55)^2)
+mse.lm22[k,6]<- mean((y.mod1-pred.test.lm.mod66)^2)
+}
+#mse.lm22
+apply(mse.lm22, 2, mean)
+apply(mse.lm22, 2, sd)
+```
+we can see that the smallest cross-validated MSE is for d=6.The smallest sd is for d=5. Combining the reasons for parsimony, we can choose d=3, because there is a initial large drop for mse when d=3, and a large dorp for sd when d=3.
+
+plots with the fits for d = 2,3,4 and 5.
+```{r}
+mod22 <- lm(price ~ poly(sq.m.pool,2),data=trainData)
+mod33 <- lm(price ~ poly(sq.m.pool,3),data=trainData)
+mod44 <- lm(price ~ poly(sq.m.pool,4),data=trainData)
+mod55 <- lm(price ~ poly(sq.m.pool,5),data=trainData)
+plot(trainData$sq.m.pool, trainData$price, pch=16)
+o <- order(trainData$sq.m.pool)
+lines(trainData$sq.m.pool[o], mod22$fit[o], lwd=5, col="red")
+lines(trainData$sq.m.pool[o], mod33$fit[o], lwd=5, col="orange")
+lines(trainData$sq.m.pool[o], mod44$fit[o], lwd=5, col="green")
+lines(trainData$sq.m.pool[o], mod55$fit[o], lwd=5, col="purple")
+```
+From the plot, Unfortunately, we can see that the orange model(d=3) does not fit well, perhaps due to too much influence from extreme values. 
+At the same time, it can be found that the red line(d=2) and the purple line(d=5) fit well, and we can find mse for further judgment.
+
+compare the MSE with poly(sq.m.pool,2) and poly(sq.m.pool,5) using 10-fold cv.
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.p1<-matrix(0)
+mse.p2<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+modp.lm.best1<-lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,2)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=data.train)
+modp.lm.best2<-lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=data.train)
+
+pred.test.lm.p <- predict(modp.lm.best1, newdata = data.test,type="response")
+y.p1 <- data.test$price
+mse.p1[k]<- mean((y.p1-pred.test.lm.p)^2)
+
+pred.test.lm.p2 <- predict(modp.lm.best2, newdata = data.test,type="response")
+y.p2 <- data.test$price
+mse.p2[k]<- mean((y.p2-pred.test.lm.p2)^2)
+}
+
+mean(mse.p1)
+mean(mse.p2)
+```
+We choose the model 2(with poly(sq.m.pool,5)) with smallest mse.0.3851225.
+model 2 is lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=data.train)
+
+For the other variable, there is no obvious non-linear can be seen.
+Then we can use regsubsets method to select the variables in model price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5)
+```{r}
+mod_lmn <- regsubsets(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=trainData)
+plot(mod_lmn)
+summary(mod_lmn)
+par(mfrow=c(2,2))
+plot(summary(mod_lmn)$rss, xlab="Number of Variables",
+ylab="RSS", type="l", lwd=3)
+plot(summary(mod_lmn)$cp, xlab="Number of Variables",
+ylab="Cp", type="l", lwd=3)
+plot(summary(mod_lmn)$bic, xlab="Number of Variables",
+ylab="BIC", type="l", lwd=3)
+plot(summary(mod_lmn)$adjr2, xlab="Number of Variables",
+ylab="Adjusted Rˆ2", type="l", lwd=3)
+```
+```{r}
+which.min(summary(mod_lmn)$rss)
+which.min(summary(mod_lmn)$cp)
+which.min(summary(mod_lmn)$bic)
+which.max(summary(mod_lmn)$adjr2)
+#all choose 8
+coef(mod_lmn, 8)
+```
+we can find all four criterion choose 8 variables, here we use the smallest BIC model.
+so we can fit another model only with the following variables:year, poly(lat, 3)2,poly(lat, 3)3 ,poly(lon, 4)2,log(sq.m.h) ,log(sq.m.block),bedrooms and sq.m.h:bathrooms .
+
+let's compare abouve 3 models by 10-fold cv mse.
+modp.lm.best1<-lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=data.train)
+modp.lm.best2<-lm(price~ year+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+bedrooms+sq.m.h:bathrooms, data=data.train)
+modp.lm.best3<-lm(price~ year+poly(lat,3)+poly(lon,2)+log(sq.m.h)+log(sq.m.block)+bedrooms+sq.m.h:bathrooms, data=data.train)
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.p1<-matrix(0)
+mse.p2<-matrix(0)
+mse.p3<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+modp.lm.best11<-lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=data.train)
+modp.lm.best22<-lm(price~ year+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+bedrooms+sq.m.h:bathrooms, data=data.train)
+modp.lm.best33<-lm(price~ year+poly(lat,3)+poly(lon,2)+log(sq.m.h)+log(sq.m.block)+bedrooms+sq.m.h:bathrooms, data=data.train)
+
+pred.test.lm.p <- predict(modp.lm.best11, newdata = data.test,type="response")
+y.p1 <- data.test$price
+mse.p1[k]<- mean((y.p1-pred.test.lm.p)^2)
+
+pred.test.lm.p2 <- predict(modp.lm.best22, newdata = data.test,type="response")
+y.p2 <- data.test$price
+mse.p2[k]<- mean((y.p2-pred.test.lm.p2)^2)
+
+pred.test.lm.p3 <- predict(modp.lm.best33, newdata = data.test,type="response")
+y.p3 <- data.test$price
+mse.p3[k]<- mean((y.p3-pred.test.lm.p3)^2)
+}
+
+mean(mse.p1)
+mean(mse.p2)
+mean(mse.p3)
+```
+We can find the model 1 have the smallest MSE, so we still choose model 1 with mse=0.3851225.
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.p1<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+modp.lm.best11<-gam(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=data.train)
+
+pred.test.lm.p <- predict(modp.lm.best11, newdata = data.test,type="response")
+y.p1 <- data.test$price
+mse.p1[k]<- mean((y.p1-pred.test.lm.p)^2)
+}
+
+mean(mse.p1)
+```
+And this is same if we use gam.
+So our best lm with unlinearity or gam model is:
+lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5))
+gam(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5))
+[limitation] Under this method, we can find that the choice of splines and polynomials and their parameters(e.g. df and deg) is very subjective, which can lead to a lot of human error or inaccuracy. At the same time, it is also prone to overfitting. Therefore, when dealing with nonlinear problems, we need patient and careful analysis and various comparative judgments.
+
+#3, Ridge regression (only contain log term not interaction term)
+Although linear models are very simple, linear models have good interpretability and predictability. Therefore, we consider an alternative to least squares to improve simple linear models. Under this method, when p>n, more accurate predictions can be made to control the variance. At the same time, by removing irrelevant features, some easier-to-interpret models can be obtained. Therefore, I consider using ridge model under the shrinkage method to model.
+The subsets are selected by fitting a linear model containing the subsets using the least squares method.
+Alternatively, fit all predictors and then estimate the coefficients to be 0.
+Shrinking the coefficient estimates can significantly reduce the variance.
+Importantly, in this method, lambda is a tuning parameter that we need to determine individually. Ridge regression is to find a suitable coefficient estimate by making the RSS smaller.
+Since choosing a good lambda is crucial, we use 10-fold cross-validation.
+Firstly,let us fit a model with all variable except for interaction term:
+x<-data.matrix(trainData[,c(4:8,11:17)])
+y<-trainData[,2]
+mod.ridge<-glmnet(x,y,alpha=0,standardize=FALSE)
+```{r}
+x<-data.matrix(trainData[,c(4:8,11:17)])
+y<-trainData[,2]
+mod.ridge<-glmnet(x,y,alpha=0,standardize=FALSE)
+plot(mod.ridge,label=TRUE,xvar="lambda")
+dim(coef(mod.ridge))
+coef(mod.ridge)[,50]#example
+```
+And we can use 10-fold cross-validation to determine lambda
+```{r}
+#use 10-fold cross-validation to determine lambda
+set.seed(7460189)
+cv.out<-cv.glmnet(x,y,alpha=0,standardize=FALSE)
+plot(cv.out)
+#find best lambda
+best.lambda<-cv.out$lambda.min
+best.lambda
+log(best.lambda)
+
+
+beta.hat.ridge<-predict(mod.ridge, s=best.lambda, type="coefficients")
+beta.hat.ridge
+```
+we can find the best lambda is 0.4623929.
+
+Also,we can use the 10-fold cross-validation to calculate the MSE.(Compute the MSE based on the automatically selected optimal lambda)
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.ridge<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+
+
+x<-data.matrix(data.train[,c(4:8,11:17)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:8,11:17)])
+y.test<-data.test[,2]
+mod.ridge<-glmnet(x,y,alpha=0,standardize=FALSE)
+#use 10-fold cross-validation to determine lambda
+set.seed(7460189)
+cv.out<-cv.glmnet(x,y,alpha=0,standardize=FALSE)
+#find best lambda
+best.lambda<-cv.out$lambda.min
+
+
+pred.ridge <- predict(mod.ridge, s=best.lambda,newx=x.test)
+mse.ridge[k]<- mean((pred.ridge-y.test)^2)
+}
+
+mean(mse.ridge)
+
+```
+
+we can find the mse=0.5995989
+[note that I also consider the models with both log and interaction(MSE=0.7489913), model without log and interaction(mse=0.7128526), and model with only interaction(mse=0.6905325)]
+we can easily find that the smallest MSE is under only contaion log terms, with is 
+x<-data.matrix(data.train[,c(4:8,11:17)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:8,11:17)])
+y.test<-data.test[,2]
+mod.ridge<-glmnet(x,y,alpha=0,standardize=FALSE)
+In conclusion, under this method, the best MSE is 0.5995989.
+[limitation]Ridge regression will include all predictors in the final model, which obviously leads to inaccurate predictions. Therefore, we choose to use the Lasso method to overcome this problem.
+#4, Lasso
+For Lasso method, it has a l1 penalty to minimize the quantity:
+sum((yi-beta0-sum(betaj*Xij))^2)+lanbdasum(abs(betaj))
+Like ridge regression, lasso also shrinks the coefficient estimates close to 0. When the tuning parameter is large enough, l1 actively forces some coefficient estimates to be exactly 0. Therefore, it performs variable selection, which means that the method only involves a subset of variables instead of including all variables.
+We just choose same x and y as Ridge regression. And we set alpha=1 here.
+Also choosing an appropriate lambda value is crucial, so still use 10-fold cv to determine the lambda.
+```{r}
+mod.lasso<-glmnet(x,y,alpha=1,standardize=FALSE)
+plot(mod.lasso,xvar="lambda")
+set.seed(7460189)
+cv.out.lasso<-cv.glmnet(x,y,alpha=1, standardize=FALSE)
+best.lambda.lasso<-cv.out.lasso$lambda.min
+best.lambda.lasso
+log(best.lambda.lasso)
+lambda.1se<-cv.out.lasso$lambda.1se
+lambda.1se
+log(lambda.1se)
+plot(cv.out.lasso)
+
+beta.hat.lasso<-predict(mod.lasso, s=best.lambda.lasso, type="coefficients")[1:13,]
+beta.hat.lasso[beta.hat.lasso!=0]
+```
+we can find the best lambda is 0.001286636.
+
+we can also use k-fold cv to find MSE.(Compute the MSE based on the automatically selected optimal lambda)
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.lasso<-matrix(0)
+mse.lasso.smaller<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+
+
+x<-data.matrix(data.train[,c(4:8,11:17)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:8,11:17)])
+y.test<-data.test[,2]
+mod.lasso<-glmnet(x,y,alpha=1,standardize=FALSE)
+#use 10-fold cross-validation to determine lambda
+set.seed(7460189)
+cv.lasso<-cv.glmnet(x,y,alpha=1,standardize=FALSE)
+#find best lambda
+best.lam.lasso<-cv.lasso$lambda.min
+lam.1se.lasso<-cv.lasso$lambda.1se
+
+#MSE based on the "best" lambda
+pred.lasso <- predict(mod.lasso, s=best.lam.lasso,newx=x.test)
+mse.lasso[k]<- mean((pred.lasso-y.test)^2)
+#MSE based on the smaller model
+pred.lasso.smaller<-predict(mod.lasso,s=lam.1se.lasso,newx=x.test)
+mse.lasso.smaller[k]<- mean((pred.lasso.smaller-y.test)^2)
+}
+
+mean(mse.lasso)
+mean(mse.lasso.smaller)
+```
+we can find the mse=0.4373122 with all variable except interaction terms.
+[note that I also consider the models with both log and interaction(MSE=0.4493914), model without log and interaction(mse=0.4455963), and model with only interaction(mse=0.4376523)] 
+So the best mse=0.4373122 with model:
+x<-data.matrix(data.train[,c(4:8,11:17)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:8,11:17)])
+y.test<-data.test[,2]
+mod.lasso<-glmnet(x,y,alpha=1,standardize=FALSE)
+[limitation]When the number of predictors exceeds the number of observations, lasso regression selects at most the number of predictors that does not exceed the number of observations. This makes Lasso regression unable to select all predictors even if all predictors are correlated. Therefore, we need to be careful when the number of predictors is more than the number of observations.
+#5，pcr (unsupervised)
+For the principal component regression, we use principal component analysis(PCA) to determine the linear combinations of the predictors.
+For many raw variables, we use a small set of principal components to capture their joint variation.
+we can firstly use k-fold cv to choose m first.
+```{r}
+#choose m
+n<nrow(trainData)
+set.seed(7460189)
+k<-3
+fold<-sample(rep(1:k, each=n/k))
+par(mfrow=c(1,3))
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+
+x<-data.matrix(data.train[,c(4:15,18,19)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:15,18,19)])
+y.test<-data.test[,2]
+
+set.seed(7460189)
+pcr.fit<-pcr(y~x,scale=FALSE, validation="CV")
+plot(pcr.fit, "validation", val.type="MSEP", legendpos="topright")
+}
+
+```
+both plots told me that the lowest MSE occurs at m=14.so choose m=14
+Then we can calculate MSE when m=14 using 10-fold cv.
+```{r}
+#calculate MSE when m=14 10-fold cv
+n<nrow(trainData)
+set.seed(7460189)
+mse.pcr<-matrix(0)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+
+x<-data.matrix(data.train[,c(4:15,18,19)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:15,18,19)])
+y.test<-data.test[,2]
+
+set.seed(7460189)
+pcr.fit<-pcr(y~x,scale=FALSE, validation="CV")
+pcr.pred<-predict(pcr.fit, x.test,ncomp=14)
+mse.pcr[k]<-mean((pcr.pred-y.test)^2)
+}
+mean(mse.pcr)
+```
+we can find the MSE is 0.4149989 with m=14
+[Note that I also compare the MSE with model1 with c(4:8,11:17)(delete interaction term), m=12(mse=0.43733); model2 with c(4:8,11:19)(contain both log and interaction), m=13 (mse=0.4314486);model3 with c(4:15)(only contain the original variable),m=11 (mse=0.4248453)]
+we can find 0.4149989 is the smallest one, so we just use model with except log term:
+x<-data.matrix(data.train[,c(4:15,18,19)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:15,18,19)])
+y.test<-data.test[,2]
+pcr.fit<-pcr(y~x,scale=FALSE, validation="CV")
+[limitation]PCR does not guarantee that the direction that best explains the predictor is also the best direction to predict the response.
+#6, plsr similar method as pcr (unsupervised)
+plsr is a regression under partial least squares method.
+pls is a dimensionality reduction method that first identifies a new set of features as the original linear combination, and then uses this feature to fit a linear model through OLS. This shows that it uses the response variable Y to identify new features, which not only approximates old features, but also identifies new features related to Y. This overcomes the problem of PCR.
+fist use 3-fold cv to choose components.
+```{r}
+#choose components
+n<nrow(trainData)
+set.seed(7460189)
+k<-3
+fold<-sample(rep(1:k, each=n/k))
+par(mfrow=c(1,3))
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+
+x<-data.matrix(data.train[,c(4:15,18,19)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:15,18,19)])
+y.test<-data.test[,2]
+
+set.seed(7460189)
+pls.fit<-plsr(y~x,scale=FALSE, validation="CV")
+plot(pls.fit, "validation", val.type="MSEP", legendpos="topright")
+}
+```
+According to the plots,it looks like we should use 12 components.
+Then calculate MSE when ncomp=12 using 10-fold cv.
+```{r}
+#calculate MSE when ncomp=12 10-fold cv
+n<nrow(trainData)
+set.seed(7460189)
+mse.pls<-matrix(0)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+
+x<-data.matrix(data.train[,c(4:15,18,19)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:15,18,19)])
+y.test<-data.test[,2]
+
+set.seed(7460189)
+pls.fit<-plsr(y~x,scale=FALSE, validation="CV")
+pls.pred<-predict(pls.fit, x.test,ncomp=14)
+mse.pls[k]<-mean((pls.pred-y.test)^2)
+}
+mean(mse.pls)
+```
+we can find the smallest MSE=0.4149989 (except the log term)
+[note that I also consider the following models. model1 with original variables and ncomp=12(mse=0.4248911);model2 with both log and interaction terms and ncomp=14(mse=0.4295125);model3 except the interaction term and ncomp=12(mse=0.43733)]
+we can find the model all variables except the log term has the smallest mse:
+x<-data.matrix(data.train[,c(4:15,18,19)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:15,18,19)])
+y.test<-data.test[,2]
+pls.fit<-plsr(y~x,scale=FALSE, validation="CV")
+[limitation]This method have higher risk to ignore the "true" correlations.
+#7, tree model
+tree model is using the tree-based method.
+This method layers or partitions the prediction space into several simple regions. This method is simple and easy to explain.
+we firstly use the full train data to fit the model.
+mod.tree<-tree(price~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data=trainData)
+```{r}
+mod.tree<-tree(price~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data=trainData)
+par(mfrow=c(2,2))
+summary(mod.tree)
+plot(mod.tree)
+text(mod.tree,pretty=0)
+cv.mod.tree<-cv.tree(mod.tree)
+plot(cv.mod.tree$size,cv.mod.tree$dev, type="b")
+plot(cv.mod.tree$k, cv.mod.tree$dev, type="b")
+prune.mod<-prune.tree(mod.tree,best=11)
+plot(prune.mod)
+text(prune.mod,pretty=0)
+```
+According to the plot, we can find best=11, so no pruning.
+
+we then use 3-fold choose k (determine whether or not prune the tree)
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-3
+fold<-sample(rep(1:k, each=n/k))
+par(mfrow=c(1,3))
+mse.tree1<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+mod.tree1<-tree(price~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data=data.train)
+
+cv.tree1<-cv.tree(mod.tree1)
+plot(cv.tree1$size,cv.tree1$dev, type="b")
+}
+
+```
+they all told that there is no need to prune the tree.
+We then fit another model:
+mod.tree2<-tree(price~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+environ+bathrooms, data=data.train)
+And also use 3-fold cv to determine whether or not prune the tree
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-3
+fold<-sample(rep(1:k, each=n/k))
+mse.tree1<-matrix(0)
+par(mfrow=c(1,3))
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+mod.tree2<-tree(price~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+environ+bathrooms, data=data.train)
+
+cv.tree2<-cv.tree(mod.tree2)
+plot(cv.tree2$size,cv.tree2$dev, type="b")
+}
+```
+also do not need to prune.
+
+
+Then we can use 10-fold cv select and calculate model.
+Although we have previously thought that no pruning is necessary, combined with the previous automatic selection of removing reno, we can make a simple comparison of the two models.
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+mse.tree1<-matrix(0)
+mse.tree2<-matrix(0)
+mse.tree3<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+mod.tree1<-tree(price~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data=data.train)
+mod.tree2<-tree(price~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+environ+bathrooms, data=data.train)
+
+pred.tree1 <- predict(mod.tree1, newdata = data.test)
+y.tree1 <- data.test$price
+mse.tree1[k]<- mean((pred.tree1-y.tree1)^2)
+
+pred.tree2 <- predict(mod.tree2, newdata = data.test)
+y.tree2 <- data.test$price
+mse.tree2[k]<- mean((pred.tree2-y.tree2)^2)
+}
+
+mean(mse.tree1)
+mean(mse.tree2)
+```
+we can find there is no difference in two MSE, we just choose the mod1 as the best model.
+The mse=0.5683009
+mod.tree.best<-tree(price~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data=data.train)
+[limitation]The prediction accuracy of this method is not as good as that of some supervised learning methods. At the same time, if bagging, random forest and boosting are used to generate a large number of trees in order to improve the accuracy, although this can significantly improve the prediction accuracy, it will not be easy to explain.
+[using bagging and random forests]:
+I also consider using the bagging and random forests method, but due to the large number of covariates in this model, the amount of r calculation is too large, and it takes a long time to produce results, so I discarded this method.
+
+[best models for price]
+we can find there are 7 knids of models that I selected before.
+Let us compare with them.
+1, lm model: modp.lm.best<-lm(price~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+bathrooms, data=trainData)
+2, lm with nonlinearity or gam model:modp.lm.gam<-lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=trainData)
+3,ridge model:
+x<-data.matrix(data.train[,c(4:8,11:17)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:8,11:17)])
+y.test<-data.test[,2]
+mod.ridge<-glmnet(x,y,alpha=0,standardize=FALSE)
+4,Lasso model:
+x<-data.matrix(data.train[,c(4:8,11:17)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:8,11:17)])
+y.test<-data.test[,2]
+mod.lasso<-glmnet(x,y,alpha=1,standardize=FALSE)
+5,pcr model:
+x<-data.matrix(data.train[,c(4:15,18,19)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:15,18,19)])
+y.test<-data.test[,2]
+pcr.fit<-pcr(y~x,scale=FALSE, validation="CV")
+6,plsr model:
+x<-data.matrix(data.train[,c(4:15,18,19)])
+y<-data.train[,2]
+x.test<-data.matrix(data.test[,c(4:15,18,19)])
+y.test<-data.test[,2]
+pls.fit<-plsr(y~x,scale=FALSE, validation="CV")
+7,tree model:
+mod.tree.best<-tree(price~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data=data.train)
+#prediction rank for the best models
+we can find the MSE of the 7 best models are 
+1, 0.4294718 2,0.3851225 3, 0.5995989 4, 0.4373122 5,0.4149989 6, 0.4149989 7, 0.5683009
+we can find that the smallest MSE is from model 2, which is lm model with nonlinearity or gam model:modp.lm.gam<-lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=trainData)
+#Analyze the best model for price
+```{r}
+modp.best<-lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=trainData)
+summary(modp.best)
+confint(modp.best,level = 0.95)
+par(mfrow=c(2,2))
+plot(modp.best)
+```
+we can find that all the covariates in this model are statistically significant.(because they all have p-value<0.05, which we can conclude that we cannot reject the H0, and the coefficient of these covariates should not be 0 at 95% significance level)
+Also, the confidence interval also told us the same result.(all significant at 95% level)
+In other word, all these covariates contribute to predict the price.
+From the model plot,we can find that the variance of residuals are not always constant. And there are 3 outliers can be found from the residual vs fitted values plot. This tell us that the model still need to be improved.
+For the Q-Q plot, we can find there is not a standard 45 degree linear line, and have 3 ourliers, so this model is still not good enough.
+[limitation of this method] Under this method, we can find that the choice of splines and polynomials and their parameters(e.g. df and deg) is very subjective, which can lead to a lot of human error or inaccuracy. At the same time, it is also prone to overfitting. Therefore, when dealing with nonlinear problems, we need patient and careful analysis and various comparative judgments.
+#submit to kaggle
+I get the score of 0.39118
+```{r}
+modp.best<-lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=trainData)
+y.hat.p<-predict(modp.best, newdata = testData,type="response")
+submission.p <- data.frame(PriceData$id, y.hat.p)
+names(submission.p) <- c("id", "price")
+write.csv(submission.p, "price.pred.best.csv", row.names = FALSE)
+```
+
+##For Sent modelling
+By using the forward and backward methods, we first use the regsubsets method to test how many variables that may be included in our model as a reference for the selection and analysis of model variables below.
+using the forward method:
+```{r}
+fit_fwd = regsubsets(sent~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+reno+environ+bathrooms, data = trainData, nvmax = 14, method = "forward")
+summary(fit_fwd)
+
+par(mfrow=c(2,2))
+plot(summary(fit_fwd)$rss, xlab="Number of Variables",
+ylab="RSS", type="l", lwd=3)
+plot(summary(fit_fwd)$cp, xlab="Number of Variables",
+ylab="Cp", type="l", lwd=3)
+plot(summary(fit_fwd)$bic, xlab="Number of Variables",
+ylab="BIC", type="l", lwd=3)
+plot(summary(fit_fwd)$adjr2, xlab="Number of Variables",
+ylab="Adjusted Rˆ2", type="l", lwd=3)
+```
+```{r}
+which.min(summary(fit_fwd)$rss)
+which.min(summary(fit_fwd)$cp)
+which.min(summary(fit_fwd)$bic)
+which.max(summary(fit_fwd)$adjr2)
+#three choose 14
+coef(fit_fwd, 13)
+```
+we can find 3 criterion choose 14 variables, whereas the smallest BIC choose to include 13 variables (without reno)
+here we use the smallest BIC as our criterion.
+the variables are year, built, lat,lon,log(sq.m.h),log(sq.m.block),sq.m.pool,bedrooms, cond, environ,bathrooms, lat:lon and sq.m.h:bathrooms.
+Using the backward method:
+```{r}
+fit_bwd = regsubsets(sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data = trainData, nvmax = 14, method = "backward")
+summary(fit_bwd)
+
+par(mfrow=c(2,2))
+plot(summary(fit_bwd)$rss, xlab="Number of Variables",
+ylab="RSS", type="l", lwd=3)
+plot(summary(fit_bwd)$cp, xlab="Number of Variables",
+ylab="Cp", type="l", lwd=3)
+plot(summary(fit_bwd)$bic, xlab="Number of Variables",
+ylab="BIC", type="l", lwd=3)
+plot(summary(fit_bwd)$adjr2, xlab="Number of Variables",
+ylab="Adjusted Rˆ2", type="l", lwd=3)
+```
+
+```{r}
+which.min(summary(fit_bwd)$rss)
+which.min(summary(fit_bwd)$cp)
+which.min(summary(fit_bwd)$bic)
+which.max(summary(fit_bwd)$adjr2)
+#three choose 14
+coef(fit_bwd, 13)
+```
+Also, we can get the same result as forward method. Three choose 14 variables, and smallest BIC choose 13 variables without reno variable.
+
+#1,linear regression model
+linear regression is a simple method to supervised learning. It assumes that the relationship between the response variable and covariates is linear. Here we use least-squares approach to estimation.
+
+First we build a model with all 14 variables as covariates, and then select variables based on their significance in the regression results. Under hierarchy principle, we should include the main effects if we include an interaction in a model.(although the main effects p-value is not significant)
+
+```{r}
+mod.s.lm.1<-lm(sent~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+environ+bathrooms+reno, data=trainData) #best
+summary(mod.s.lm.1)
+```
+
+
+All variables are significant, and the regsubsets results tell us that 13 and 14 variables are appropriate, so we can compare models with 13(without reno) and 14 variables. (The regsubsets results tell us that in the 13-variable model, reno should be removed, and in the output of lm, the reno variable can be found to have the least significance.)
+Here we compare the ccr of these 2 models using 10-fold cv.
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+cr.s.lm<-matrix(0)
+cr.s.lm1<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+mods.lm.best<-lm(sent~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+environ+bathrooms+reno, data=data.train)
+mods.lm.best1<-lm(sent~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+environ+bathrooms, data=data.train)
+
+pred.test.lm.s <- predict(mods.lm.best, newdata = data.test)
+pred.test.lm.s1 <- predict(mods.lm.best1, newdata = data.test)
+
+
+y.hat.s.lm <- rep(0, n/k)
+y.hat.s.lm[pred.test.lm.s>=0.5] <- 1
+y.hat.s.lm[pred.test.lm.s<0.5] <- 0
+y.s.lm <- data.test$sent
+cr.s.lm[k]<- mean(y.s.lm==y.hat.s.lm,na.rm = TRUE)
+
+y.hat.s.lm1 <- rep(0, n/k)
+y.hat.s.lm1[pred.test.lm.s1>=0.5] <- 1
+y.s.lm1 <- data.test$sent
+cr.s.lm1[k]<- mean(y.s.lm1==y.hat.s.lm1,na.rm = TRUE)
+}
+
+mean(cr.s.lm)
+mean(cr.s.lm1)
+```
+we can find the first model have the largest correct classification rate with 79.46477%
+So, we choose the best lm model is mods.lm.best<-lm(sent~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+environ+bathrooms+reno, data=data.train) with all 14 variables.
+[limitation] we can find this model does not fitted well. The very small adjusted R-squared(0.2322) of the linear regression results is indicating a poor fit, although all covariates are statistically significant.
+(only 23.22% covariates can explained by the response variable sent)
+Since sent is a logistic variable, lm approach is not suitable and logistic regression is more appropriate.(because linear regression might produce probabilities < 0 or >1.)
+
+#2, logistic (we know that sent is 0 or 1, so senti is obey Bernoulli distribution)
+Estimation is maximum likelihood estimation (MLE)
+Here we first establish 2 glm model with family=binomial.(because sent is a logical variable)
+First, we rank the covariates in the order of p-values (from small to large), and then use the ANOVA method to perform a comparative test.(compare the model with reno or without reno)
+```{r}
+mod.s.glm.1<-glm(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, family=binomial, data=trainData)
+summary(mod.s.glm.1)
+mod.s.glm.2<-glm(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, family=binomial, data=trainData)
+summary(mod.s.glm.2)
+```
+AIC is 26129
+From the result, we can find for glm(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, family=binomial, data=trainData)
+only reno is not statistically significant.
+For model2:glm(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, family=binomial, data=trainData)
+all variables are statistically significant.(p-value<0.05)
+
+we can also use chi-squared test(ANOVA)
+```{r}
+anova(mod.s.glm.1, test="Chisq") #remove reno
+anova(mod.s.glm.2, test="Chisq") #good one
+```
+we can find the second model is better with all variables are significant (p-value<0.05) at 5% level.
+So, we choose our best glm model is glm(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, family=binomial, data=data.train)
+And calculate best model's correct classification rate using 10-fold cross-validation.
+```{r}
+trainData$sent <- as.factor(trainData$sent)
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+cr.s.glm<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+mods.glm.best<-glm(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, family=binomial, data=data.train)
+
+pred.test.glm.s <- predict(mods.glm.best, newdata = data.test,type="response")
+
+
+y.hat.s.glm <- rep(0, n/k)
+y.hat.s.glm[pred.test.glm.s>=0.5] <- 1
+y.s.glm <- (data.test$sent=="TRUE")*1
+cr.s.glm[k]<- mean(y.s.glm==y.hat.s.glm,na.rm = TRUE)
+}
+
+mean(cr.s.glm)
+#length(y.s.glm)
+#length(y.hat.s.glm)
+#n
+```
+best glm model's correct cr is 75.85798%
+[limitation]It assumes a linear relationship between the response and covariates variables, which may be inaccurate. Through the previous EDA section, we can find that there are indeed some covariates that may be nonlinear between the variable sent.
+
+#3, LDA model. bayes
+Firstly see which variables are most correlated with sent :
+```{r}
+trainData$reno <- as.numeric(trainData$reno)
+trainData$sent <- as.numeric(trainData$sent)
+cor(trainData[,c(3:19)])[,1]
+```
+we can find sq.m.h, log_sq.m.h  and sq.m.h_bathrooms have larger correlation with sent.However,they are all not strong correlations, so we should use backward method to select the variables.
+[According to the previous results, it can be judged that most of the final models have 13-14 variables. Therefore, it can be speculated that there are also 13-14 variables here, so it would be better for us to use backward selection.]
+```{r}
+lda.fit.1 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=trainData)
+lda.fit.1
+summary(lda.fit.1)
+```
+```{r}
+#use k-fold cv find the best lda model with 13 or 14 variables
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+cr.lda<-matrix(0)
+cr.lda.1<-matrix(0)
+cr.lda.2<-matrix(0)
+cr.lda.3<-matrix(0)
+cr.lda.4<-matrix(0)
+cr.lda.5<-matrix(0)
+cr.lda.6<-matrix(0)
+cr.lda.7<-matrix(0)
+cr.lda.8<-matrix(0)
+cr.lda.9<-matrix(0)
+cr.lda.10<-matrix(0)
+cr.lda.11<-matrix(0)
+cr.lda.12<-matrix(0)
+cr.lda.13<-matrix(0)
+cr.lda.14<-matrix(0)
+
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+lda.fit <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+lda.fit.1 <- lda(sent~built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+lda.fit.2 <- lda(sent~year+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+lda.fit.3 <- lda(sent~year+built+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+lda.fit.4 <- lda(sent~year+built+lon+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+lda.fit.5 <- lda(sent~year+built+lon+log(sq.m.h)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+lda.fit.6 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+lda.fit.7 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+lda.fit.8 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+lda.fit.9 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+environ+cond+lat+bathrooms+reno, data=data.train)
+lda.fit.10 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+lat+bathrooms+reno, data=data.train)
+lda.fit.11 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+lat+bathrooms+reno, data=data.train)
+lda.fit.12 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+lda.fit.13 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+reno, data=data.train)
+lda.fit.14 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+
+
+pred.test.lda <- predict(lda.fit, newdata = data.test,type="response")$class
+pred.test.lda.1 <- predict(lda.fit.1, newdata = data.test,type="response")$class
+pred.test.lda.2 <- predict(lda.fit.2, newdata = data.test,type="response")$class
+pred.test.lda.3 <- predict(lda.fit.3, newdata = data.test,type="response")$class
+pred.test.lda.4 <- predict(lda.fit.4, newdata = data.test,type="response")$class
+pred.test.lda.5 <- predict(lda.fit.5, newdata = data.test,type="response")$class
+pred.test.lda.6 <- predict(lda.fit.6, newdata = data.test,type="response")$class
+pred.test.lda.7 <- predict(lda.fit.7, newdata = data.test,type="response")$class
+pred.test.lda.8 <- predict(lda.fit.8, newdata = data.test,type="response")$class
+pred.test.lda.9 <- predict(lda.fit.9, newdata = data.test,type="response")$class
+pred.test.lda.10 <- predict(lda.fit.10, newdata = data.test,type="response")$class
+pred.test.lda.11 <- predict(lda.fit.11, newdata = data.test,type="response")$class
+pred.test.lda.12 <- predict(lda.fit.12, newdata = data.test,type="response")$class
+pred.test.lda.13 <- predict(lda.fit.13, newdata = data.test,type="response")$class
+pred.test.lda.14 <- predict(lda.fit.14, newdata = data.test,type="response")$class
+  
+
+y.lda <- data.test$sent
+table(pred.test.lda, y.lda)
+cr.lda[k]<- round(mean(pred.test.lda==y.lda)*100,4)
+
+y.lda.1 <- data.test$sent
+table(pred.test.lda.1, y.lda.1)
+cr.lda.1[k]<- round(mean(pred.test.lda.1==y.lda.1)*100,4)
+
+y.lda.2 <- data.test$sent
+table(pred.test.lda.2, y.lda.2)
+cr.lda.2[k]<- round(mean(pred.test.lda.2==y.lda.2)*100,4)
+
+y.lda.3 <- data.test$sent
+table(pred.test.lda.3, y.lda.3)
+cr.lda.3[k]<- round(mean(pred.test.lda.3==y.lda.3)*100,4)
+
+y.lda.4 <- data.test$sent
+table(pred.test.lda.4, y.lda.4)
+cr.lda.4[k]<- round(mean(pred.test.lda.4==y.lda.4)*100,4)
+
+y.lda.5 <- data.test$sent
+table(pred.test.lda.5, y.lda.5)
+cr.lda.5[k]<- round(mean(pred.test.lda.5==y.lda.5)*100,4)
+
+y.lda.6 <- data.test$sent
+table(pred.test.lda.6, y.lda.6)
+cr.lda.6[k]<- round(mean(pred.test.lda.6==y.lda.6)*100,4)
+
+y.lda.7 <- data.test$sent
+table(pred.test.lda.7, y.lda.7)
+cr.lda.7[k]<- round(mean(pred.test.lda.7==y.lda.7)*100,4)
+
+y.lda.8 <- data.test$sent
+table(pred.test.lda.8, y.lda.8)
+cr.lda.8[k]<- round(mean(pred.test.lda.8==y.lda.8)*100,4)
+
+y.lda.9 <- data.test$sent
+table(pred.test.lda.9, y.lda.9)
+cr.lda.9[k]<- round(mean(pred.test.lda.9==y.lda.9)*100,4)
+
+y.lda.10 <- data.test$sent
+table(pred.test.lda.10, y.lda.10)
+cr.lda.10[k]<- round(mean(pred.test.lda.10==y.lda.10)*100,4)
+
+y.lda.11 <- data.test$sent
+table(pred.test.lda.11, y.lda.11)
+cr.lda.11[k]<- round(mean(pred.test.lda.11==y.lda.11)*100,4)
+
+y.lda.12 <- data.test$sent
+table(pred.test.lda.12, y.lda.12)
+cr.lda.12[k]<- round(mean(pred.test.lda.12==y.lda.12)*100,4)
+
+y.lda.13 <- data.test$sent
+table(pred.test.lda.13, y.lda.13)
+cr.lda.13[k]<- round(mean(pred.test.lda.13==y.lda.13)*100,4)
+
+y.lda.14 <- data.test$sent
+table(pred.test.lda.14, y.lda.14)
+cr.lda.14[k]<- round(mean(pred.test.lda.14==y.lda.14)*100,4)
+}
+m.lda<-mean(cr.lda)
+m.lda1<-mean(cr.lda.1)
+m.lda2<-mean(cr.lda.2)
+m.lda3<-mean(cr.lda.3)
+m.lda4<-mean(cr.lda.4)
+m.lda5<-mean(cr.lda.5)
+m.lda6<-mean(cr.lda.6)
+m.lda7<-mean(cr.lda.7)
+m.lda8<-mean(cr.lda.8)
+m.lda9<-mean(cr.lda.9)
+m.lda10<-mean(cr.lda.10)
+m.lda11<-mean(cr.lda.11)
+m.lda12<-mean(cr.lda.12)
+m.lda13<-mean(cr.lda.13)
+m.lda14<-mean(cr.lda.14)
+c(m.lda, m.lda1,m.lda2,m.lda3,m.lda4,m.lda5,m.lda6,m.lda7,m.lda8,m.lda9,m.lda10,m.lda11,m.lda12,m.lda13,m.lda14)
+mse.mean.lda<-max(c(m.lda, m.lda1,m.lda2,m.lda3,m.lda4,m.lda5,m.lda6,m.lda7,m.lda8,m.lda9,m.lda10,m.lda11,m.lda12,m.lda13,m.lda14))
+mse.mean.lda
+```
+Here we established 15 models. the first one is include all 14 variables, and all other models contain 13 variables (i.e. remove one variable from the 14 at a time.)
+we can find the crrs are [79.87699 79.85032 79.61167 79.56015 78.46751 79.81638 79.72314 79.37027 79.60044 79.68984 79.82707 79.82715 79.82385 79.89692 79.92691]
+we can find the largest correct cr is 79.92691% which is achieved by model 14.
+lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+```{r}
+#use k-fold cv find the best lda model with 12 variables
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+cr.lda.1<-matrix(0)
+cr.lda.2<-matrix(0)
+cr.lda.3<-matrix(0)
+cr.lda.4<-matrix(0)
+cr.lda.5<-matrix(0)
+cr.lda.6<-matrix(0)
+cr.lda.7<-matrix(0)
+cr.lda.8<-matrix(0)
+cr.lda.9<-matrix(0)
+cr.lda.10<-matrix(0)
+cr.lda.11<-matrix(0)
+cr.lda.12<-matrix(0)
+cr.lda.13<-matrix(0)
+
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+lda.fit.1 <- lda(sent~built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+lda.fit.2 <- lda(sent~year+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+lda.fit.3 <- lda(sent~year+built+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+lda.fit.4 <- lda(sent~year+built+lon+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+lda.fit.5 <- lda(sent~year+built+lon+log(sq.m.h)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+lda.fit.6 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+lda.fit.7 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+lda.fit.8 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+lda.fit.9 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+environ+cond+lat+bathrooms, data=data.train)
+lda.fit.10 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+lat+bathrooms, data=data.train)
+lda.fit.11 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+lat+bathrooms, data=data.train)
+lda.fit.12 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms, data=data.train)
+lda.fit.13 <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat, data=data.train)
+
+
+pred.test.lda <- predict(lda.fit, newdata = data.test,type="response")$class
+pred.test.lda.1 <- predict(lda.fit.1, newdata = data.test,type="response")$class
+pred.test.lda.2 <- predict(lda.fit.2, newdata = data.test,type="response")$class
+pred.test.lda.3 <- predict(lda.fit.3, newdata = data.test,type="response")$class
+pred.test.lda.4 <- predict(lda.fit.4, newdata = data.test,type="response")$class
+pred.test.lda.5 <- predict(lda.fit.5, newdata = data.test,type="response")$class
+pred.test.lda.6 <- predict(lda.fit.6, newdata = data.test,type="response")$class
+pred.test.lda.7 <- predict(lda.fit.7, newdata = data.test,type="response")$class
+pred.test.lda.8 <- predict(lda.fit.8, newdata = data.test,type="response")$class
+pred.test.lda.9 <- predict(lda.fit.9, newdata = data.test,type="response")$class
+pred.test.lda.10 <- predict(lda.fit.10, newdata = data.test,type="response")$class
+pred.test.lda.11 <- predict(lda.fit.11, newdata = data.test,type="response")$class
+pred.test.lda.12 <- predict(lda.fit.12, newdata = data.test,type="response")$class
+pred.test.lda.13 <- predict(lda.fit.13, newdata = data.test,type="response")$class
+  
+
+y.lda <- data.test$sent
+table(pred.test.lda, y.lda)
+cr.lda[k]<- round(mean(pred.test.lda==y.lda)*100,4)
+
+y.lda.1 <- data.test$sent
+table(pred.test.lda.1, y.lda.1)
+cr.lda.1[k]<- round(mean(pred.test.lda.1==y.lda.1)*100,4)
+
+y.lda.2 <- data.test$sent
+table(pred.test.lda.2, y.lda.2)
+cr.lda.2[k]<- round(mean(pred.test.lda.2==y.lda.2)*100,4)
+
+y.lda.3 <- data.test$sent
+table(pred.test.lda.3, y.lda.3)
+cr.lda.3[k]<- round(mean(pred.test.lda.3==y.lda.3)*100,4)
+
+y.lda.4 <- data.test$sent
+table(pred.test.lda.4, y.lda.4)
+cr.lda.4[k]<- round(mean(pred.test.lda.4==y.lda.4)*100,4)
+
+y.lda.5 <- data.test$sent
+table(pred.test.lda.5, y.lda.5)
+cr.lda.5[k]<- round(mean(pred.test.lda.5==y.lda.5)*100,4)
+
+y.lda.6 <- data.test$sent
+table(pred.test.lda.6, y.lda.6)
+cr.lda.6[k]<- round(mean(pred.test.lda.6==y.lda.6)*100,4)
+
+y.lda.7 <- data.test$sent
+table(pred.test.lda.7, y.lda.7)
+cr.lda.7[k]<- round(mean(pred.test.lda.7==y.lda.7)*100,4)
+
+y.lda.8 <- data.test$sent
+table(pred.test.lda.8, y.lda.8)
+cr.lda.8[k]<- round(mean(pred.test.lda.8==y.lda.8)*100,4)
+
+y.lda.9 <- data.test$sent
+table(pred.test.lda.9, y.lda.9)
+cr.lda.9[k]<- round(mean(pred.test.lda.9==y.lda.9)*100,4)
+
+y.lda.10 <- data.test$sent
+table(pred.test.lda.10, y.lda.10)
+cr.lda.10[k]<- round(mean(pred.test.lda.10==y.lda.10)*100,4)
+
+y.lda.11 <- data.test$sent
+table(pred.test.lda.11, y.lda.11)
+cr.lda.11[k]<- round(mean(pred.test.lda.11==y.lda.11)*100,4)
+
+y.lda.12 <- data.test$sent
+table(pred.test.lda.12, y.lda.12)
+cr.lda.12[k]<- round(mean(pred.test.lda.12==y.lda.12)*100,4)
+
+y.lda.13 <- data.test$sent
+table(pred.test.lda.13, y.lda.13)
+cr.lda.13[k]<- round(mean(pred.test.lda.13==y.lda.13)*100,4)
+}
+m.lda<-mean(cr.lda)
+m.lda1<-mean(cr.lda.1)
+m.lda2<-mean(cr.lda.2)
+m.lda3<-mean(cr.lda.3)
+m.lda4<-mean(cr.lda.4)
+m.lda5<-mean(cr.lda.5)
+m.lda6<-mean(cr.lda.6)
+m.lda7<-mean(cr.lda.7)
+m.lda8<-mean(cr.lda.8)
+m.lda9<-mean(cr.lda.9)
+m.lda10<-mean(cr.lda.10)
+m.lda11<-mean(cr.lda.11)
+m.lda12<-mean(cr.lda.12)
+m.lda13<-mean(cr.lda.13)
+
+c(m.lda, m.lda1,m.lda2,m.lda3,m.lda4,m.lda5,m.lda6,m.lda7,m.lda8,m.lda9,m.lda10,m.lda11,m.lda12,m.lda13)
+mse.mean.lda<-max(c(m.lda, m.lda1,m.lda2,m.lda3,m.lda4,m.lda5,m.lda6,m.lda7,m.lda8,m.lda9,m.lda10,m.lda11,m.lda12,m.lda13))
+mse.mean.lda
+```
+Then we established 13 models. all models contain 12 variables (i.e. remove one variable from the 13 at a time.)
+The crrs are [79.92015 79.83011 79.57806 79.62335 78.43048 79.79621 79.66965 79.38356 79.65992 79.63984 79.82027 79.82719 79.87394 79.89364]
+we can find the ccr 79.92015% is smaller than 79.92691%
+so I still choose model from last part, which is lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+with best model's ccr is 79.92691%
+[limitation]We can find that k in the lda model is fixed, and we must know this value in advance, which makes the use of the model limited. Second, the model's major distribution fails to capture correlations, and the data is not hierarchical.
+#4, qda model, naive bayes
+we use backward selection method to find the best model.(similar method as lda)
+```{r}
+qda.fit.1 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=trainData)
+qda.fit.1
+```
+Here we established 15 models. the first one is include all 14 variables, and all other models contain 13 variables (i.e. remove one variable from the 14 at a time.)
+```{r}
+#use k-fold cv find the best lda model with 13 or 14 variables
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+cr.qda<-matrix(0)
+cr.qda.1<-matrix(0)
+cr.qda.2<-matrix(0)
+cr.qda.3<-matrix(0)
+cr.qda.4<-matrix(0)
+cr.qda.5<-matrix(0)
+cr.qda.6<-matrix(0)
+cr.qda.7<-matrix(0)
+cr.qda.8<-matrix(0)
+cr.qda.9<-matrix(0)
+cr.qda.10<-matrix(0)
+cr.qda.11<-matrix(0)
+cr.qda.12<-matrix(0)
+cr.qda.13<-matrix(0)
+cr.qda.14<-matrix(0)
+
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+qda.fit <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+qda.fit.1 <- qda(sent~built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+qda.fit.2 <- qda(sent~year+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+qda.fit.3 <- qda(sent~year+built+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+qda.fit.4 <- qda(sent~year+built+lon+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+qda.fit.5 <- qda(sent~year+built+lon+log(sq.m.h)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+qda.fit.6 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+qda.fit.7 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+qda.fit.8 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+sq.m.h:bathrooms+environ+cond+lat+bathrooms+reno, data=data.train)
+qda.fit.9 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+environ+cond+lat+bathrooms+reno, data=data.train)
+qda.fit.10 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+lat+bathrooms+reno, data=data.train)
+qda.fit.11 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+lat+bathrooms+reno, data=data.train)
+qda.fit.12 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+qda.fit.13 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+reno, data=data.train)
+qda.fit.14 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+
+
+pred.test.qda <- predict(qda.fit, newdata = data.test,type="response")$class
+pred.test.qda.1 <- predict(qda.fit.1, newdata = data.test,type="response")$class
+pred.test.qda.2 <- predict(qda.fit.2, newdata = data.test,type="response")$class
+pred.test.qda.3 <- predict(qda.fit.3, newdata = data.test,type="response")$class
+pred.test.qda.4 <- predict(qda.fit.4, newdata = data.test,type="response")$class
+pred.test.qda.5 <- predict(qda.fit.5, newdata = data.test,type="response")$class
+pred.test.qda.6 <- predict(qda.fit.6, newdata = data.test,type="response")$class
+pred.test.qda.7 <- predict(qda.fit.7, newdata = data.test,type="response")$class
+pred.test.qda.8 <- predict(qda.fit.8, newdata = data.test,type="response")$class
+pred.test.qda.9 <- predict(qda.fit.9, newdata = data.test,type="response")$class
+pred.test.qda.10 <- predict(qda.fit.10, newdata = data.test,type="response")$class
+pred.test.qda.11 <- predict(qda.fit.11, newdata = data.test,type="response")$class
+pred.test.qda.12 <- predict(qda.fit.12, newdata = data.test,type="response")$class
+pred.test.qda.13 <- predict(qda.fit.13, newdata = data.test,type="response")$class
+pred.test.qda.14 <- predict(qda.fit.14, newdata = data.test,type="response")$class
+  
+
+y.qda <- data.test$sent
+table(pred.test.qda, y.qda)
+cr.qda[k]<- round(mean(pred.test.qda==y.qda)*100,4)
+
+y.qda.1 <- data.test$sent
+table(pred.test.qda.1, y.qda.1)
+cr.qda.1[k]<- round(mean(pred.test.qda.1==y.qda.1)*100,4)
+
+y.qda.2 <- data.test$sent
+table(pred.test.qda.2, y.qda.2)
+cr.qda.2[k]<- round(mean(pred.test.qda.2==y.qda.2)*100,4)
+
+y.qda.3 <- data.test$sent
+table(pred.test.qda.3, y.qda.3)
+cr.qda.3[k]<- round(mean(pred.test.qda.3==y.qda.3)*100,4)
+
+y.qda.4 <- data.test$sent
+table(pred.test.qda.4, y.qda.4)
+cr.qda.4[k]<- round(mean(pred.test.qda.4==y.qda.4)*100,4)
+
+y.qda.5 <- data.test$sent
+table(pred.test.qda.5, y.qda.5)
+cr.qda.5[k]<- round(mean(pred.test.qda.5==y.qda.5)*100,4)
+
+y.qda.6 <- data.test$sent
+table(pred.test.qda.6, y.qda.6)
+cr.qda.6[k]<- round(mean(pred.test.qda.6==y.qda.6)*100,4)
+
+y.qda.7 <- data.test$sent
+table(pred.test.qda.7, y.qda.7)
+cr.qda.7[k]<- round(mean(pred.test.qda.7==y.qda.7)*100,4)
+
+y.qda.8 <- data.test$sent
+table(pred.test.qda.8, y.qda.8)
+cr.qda.8[k]<- round(mean(pred.test.qda.8==y.qda.8)*100,4)
+
+y.qda.9 <- data.test$sent
+table(pred.test.qda.9, y.qda.9)
+cr.qda.9[k]<- round(mean(pred.test.qda.9==y.qda.9)*100,4)
+
+y.qda.10 <- data.test$sent
+table(pred.test.qda.10, y.qda.10)
+cr.qda.10[k]<- round(mean(pred.test.qda.10==y.qda.10)*100,4)
+
+y.qda.11 <- data.test$sent
+table(pred.test.qda.11, y.qda.11)
+cr.qda.11[k]<- round(mean(pred.test.qda.11==y.qda.11)*100,4)
+
+y.qda.12 <- data.test$sent
+table(pred.test.qda.12, y.qda.12)
+cr.qda.12[k]<- round(mean(pred.test.qda.12==y.qda.12)*100,4)
+
+y.qda.13 <- data.test$sent
+table(pred.test.qda.13, y.qda.13)
+cr.qda.13[k]<- round(mean(pred.test.qda.13==y.qda.13)*100,4)
+
+y.qda.14 <- data.test$sent
+table(pred.test.qda.14, y.qda.14)
+cr.qda.14[k]<- round(mean(pred.test.qda.14==y.qda.14)*100,4)
+}
+m.qda<-mean(cr.qda)
+m.qda1<-mean(cr.qda.1)
+m.qda2<-mean(cr.qda.2)
+m.qda3<-mean(cr.qda.3)
+m.qda4<-mean(cr.qda.4)
+m.qda5<-mean(cr.qda.5)
+m.qda6<-mean(cr.qda.6)
+m.qda7<-mean(cr.qda.7)
+m.qda8<-mean(cr.qda.8)
+m.qda9<-mean(cr.qda.9)
+m.qda10<-mean(cr.qda.10)
+m.qda11<-mean(cr.qda.11)
+m.qda12<-mean(cr.qda.12)
+m.qda13<-mean(cr.qda.13)
+m.qda14<-mean(cr.qda.14)
+c(m.qda, m.qda1,m.qda2,m.qda3,m.qda4,m.qda5,m.qda6,m.qda7,m.qda8,m.qda9,m.qda10,m.qda11,m.qda12,m.qda13,m.qda14)
+mse.mean.qda<-max(c(m.qda, m.qda1,m.qda2,m.qda3,m.qda4,m.qda5,m.qda6,m.qda7,m.qda8,m.qda9,m.qda10,m.qda11,m.qda12,m.qda13,m.qda14))
+mse.mean.qda
+```
+the crrs are [76.69891 76.74212 76.73914 76.84517 76.14917 76.71481 76.56925 76.52208 76.80179 76.10536 76.68213 76.71550 76.94138 76.43565 76.67499]
+we can find the largest ccr is 76.94138%, which is from model 12.
+qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+
+Then we established 13 models, all models contain 12 variables (i.e. remove one variable from the 13 at a time.)
+```{r}
+#use k-fold cv find the best lda model with 12 variables
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+
+cr.qda.1<-matrix(0)
+cr.qda.2<-matrix(0)
+cr.qda.3<-matrix(0)
+cr.qda.4<-matrix(0)
+cr.qda.5<-matrix(0)
+cr.qda.6<-matrix(0)
+cr.qda.7<-matrix(0)
+cr.qda.8<-matrix(0)
+cr.qda.9<-matrix(0)
+cr.qda.10<-matrix(0)
+cr.qda.11<-matrix(0)
+cr.qda.12<-matrix(0)
+cr.qda.13<-matrix(0)
+
+
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+
+qda.fit.1 <- qda(sent~built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+qda.fit.2 <- qda(sent~year+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+qda.fit.3 <- qda(sent~year+built+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+qda.fit.4 <- qda(sent~year+built+lon+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+qda.fit.5 <- qda(sent~year+built+lon+log(sq.m.h)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+qda.fit.6 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+qda.fit.7 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+qda.fit.8 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+qda.fit.9 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+environ+cond+bathrooms+reno, data=data.train)
+qda.fit.10 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+bathrooms+reno, data=data.train)
+qda.fit.11 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+bathrooms+reno, data=data.train)
+qda.fit.12 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+reno, data=data.train)
+qda.fit.13 <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms, data=data.train)
+
+
+
+pred.test.qda <- predict(qda.fit, newdata = data.test,type="response")$class
+pred.test.qda.1 <- predict(qda.fit.1, newdata = data.test,type="response")$class
+pred.test.qda.2 <- predict(qda.fit.2, newdata = data.test,type="response")$class
+pred.test.qda.3 <- predict(qda.fit.3, newdata = data.test,type="response")$class
+pred.test.qda.4 <- predict(qda.fit.4, newdata = data.test,type="response")$class
+pred.test.qda.5 <- predict(qda.fit.5, newdata = data.test,type="response")$class
+pred.test.qda.6 <- predict(qda.fit.6, newdata = data.test,type="response")$class
+pred.test.qda.7 <- predict(qda.fit.7, newdata = data.test,type="response")$class
+pred.test.qda.8 <- predict(qda.fit.8, newdata = data.test,type="response")$class
+pred.test.qda.9 <- predict(qda.fit.9, newdata = data.test,type="response")$class
+pred.test.qda.10 <- predict(qda.fit.10, newdata = data.test,type="response")$class
+pred.test.qda.11 <- predict(qda.fit.11, newdata = data.test,type="response")$class
+pred.test.qda.12 <- predict(qda.fit.12, newdata = data.test,type="response")$class
+pred.test.qda.13 <- predict(qda.fit.13, newdata = data.test,type="response")$class
+
+
+y.qda <- data.test$sent
+table(pred.test.qda, y.qda)
+cr.qda[k]<- round(mean(pred.test.qda==y.qda)*100,4)
+
+y.qda.1 <- data.test$sent
+table(pred.test.qda.1, y.qda.1)
+cr.qda.1[k]<- round(mean(pred.test.qda.1==y.qda.1)*100,4)
+
+y.qda.2 <- data.test$sent
+table(pred.test.qda.2, y.qda.2)
+cr.qda.2[k]<- round(mean(pred.test.qda.2==y.qda.2)*100,4)
+
+y.qda.3 <- data.test$sent
+table(pred.test.qda.3, y.qda.3)
+cr.qda.3[k]<- round(mean(pred.test.qda.3==y.qda.3)*100,4)
+
+y.qda.4 <- data.test$sent
+table(pred.test.qda.4, y.qda.4)
+cr.qda.4[k]<- round(mean(pred.test.qda.4==y.qda.4)*100,4)
+
+y.qda.5 <- data.test$sent
+table(pred.test.qda.5, y.qda.5)
+cr.qda.5[k]<- round(mean(pred.test.qda.5==y.qda.5)*100,4)
+
+y.qda.6 <- data.test$sent
+table(pred.test.qda.6, y.qda.6)
+cr.qda.6[k]<- round(mean(pred.test.qda.6==y.qda.6)*100,4)
+
+y.qda.7 <- data.test$sent
+table(pred.test.qda.7, y.qda.7)
+cr.qda.7[k]<- round(mean(pred.test.qda.7==y.qda.7)*100,4)
+
+y.qda.8 <- data.test$sent
+table(pred.test.qda.8, y.qda.8)
+cr.qda.8[k]<- round(mean(pred.test.qda.8==y.qda.8)*100,4)
+
+y.qda.9 <- data.test$sent
+table(pred.test.qda.9, y.qda.9)
+cr.qda.9[k]<- round(mean(pred.test.qda.9==y.qda.9)*100,4)
+
+y.qda.10 <- data.test$sent
+table(pred.test.qda.10, y.qda.10)
+cr.qda.10[k]<- round(mean(pred.test.qda.10==y.qda.10)*100,4)
+
+y.qda.11 <- data.test$sent
+table(pred.test.qda.11, y.qda.11)
+cr.qda.11[k]<- round(mean(pred.test.qda.11==y.qda.11)*100,4)
+
+y.qda.12 <- data.test$sent
+table(pred.test.qda.12, y.qda.12)
+cr.qda.12[k]<- round(mean(pred.test.qda.12==y.qda.12)*100,4)
+
+y.qda.13 <- data.test$sent
+table(pred.test.qda.13, y.qda.13)
+cr.qda.13[k]<- round(mean(pred.test.qda.13==y.qda.13)*100,4)
+}
+m.qda<-mean(cr.qda)
+m.qda1<-mean(cr.qda.1)
+m.qda2<-mean(cr.qda.2)
+m.qda3<-mean(cr.qda.3)
+m.qda4<-mean(cr.qda.4)
+m.qda5<-mean(cr.qda.5)
+m.qda6<-mean(cr.qda.6)
+m.qda7<-mean(cr.qda.7)
+m.qda8<-mean(cr.qda.8)
+m.qda9<-mean(cr.qda.9)
+m.qda10<-mean(cr.qda.10)
+m.qda11<-mean(cr.qda.11)
+m.qda12<-mean(cr.qda.12)
+m.qda13<-mean(cr.qda.13)
+
+c(m.qda, m.qda1,m.qda2,m.qda3,m.qda4,m.qda5,m.qda6,m.qda7,m.qda8,m.qda9,m.qda10,m.qda11,m.qda12,m.qda13)
+mse.mean.qda<-max(c(m.qda, m.qda1,m.qda2,m.qda3,m.qda4,m.qda5,m.qda6,m.qda7,m.qda8,m.qda9,m.qda10,m.qda11,m.qda12,m.qda13))
+mse.mean.qda
+```
+The crrs are [76.80883 76.92138 76.81467 76.68515 76.32169 76.87154 76.63163 76.65430 76.77515 75.95526 76.84476 76.83152 76.53832 76.73453]
+we can find the largest crr from here is  76.92138%,which is smaller than 76.94138%
+so best model for qda is from last part:
+qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+best model's ccr is 76.94138%
+[limitation]qda cannot be used as a dimensionality reduction technique. At the same time, when the data size is small, it may not be accurate enough. Under this data set, the prediction result of qda is not as good as that of lda
+
+#5, knn model
+let's determine the k by using all the 14 variables using 10-fold cv 
+```{r}
+#use k-fold cv find the best knn model with 14 variables
+n<nrow(trainData)
+set.seed(7460189)
+k<-3
+fold<-sample(rep(1:k, each=n/k))
+
+cr.knn<-matrix(0)
+par(mfrow=c(1,3))
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+
+train.X <- data.train[,c(4:8,11:19)]
+train.y <- data.train[,3]
+test.X <- data.test[,c(4:8,11:19)]
+test.y <- data.test[,3]
+
+#try k=1:20
+k.knn<-1:20
+test.cr<-rep(0,length(k.knn))
+
+for (c in 1:20) {
+knn.pred<-knn(train.X, test.X , train.y,k=c)
+test.cr[c]<- round(mean(knn.pred!=test.y)*100,4)
+}
+plot(k.knn,test.cr,type="l",lwd=3)
+}
+```
+
+According to the plot, it seems that the best k=19.
+
+Then we use 10-fold cv to find the best knn model with 14 variables (with largest ccr)
+```{r}
+#use k-fold cv find the best knn model with 14 variables
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+
+test.cr<-matrix(0)
+
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+
+train.X <- data.train[,c(4:8,11:19)]
+train.y <- data.train[,3]
+test.X <- data.test[,c(4:8,11:19)]
+test.y <- data.test[,3]
+
+knn.pred<-knn(train.X, test.X , train.y, k=19)
+test.cr[k]<- round(mean(knn.pred==test.y)*100,4)
+}
+m.knn<-mean(test.cr)
+m.knn
+```
+we can find the best ccr is 78.27407%
+[note that I also consider other k values:
+k=15, crr=78.23726; k=16, crr=78.09122;k=17, crr=78.16781;k=18,crr=78.09122
+Therefore the largest crr is 78.27407% for all 14 variables.
+
+Then, let's determine the k for 13 variable (without reno) using 3-fold cv
+```{r}
+#use k-fold cv find the best knn model with 13 variables delete reno
+n<nrow(trainData)
+set.seed(7460189)
+k<-3
+fold<-sample(rep(1:k, each=n/k))
+
+cr.knn1<-matrix(0)
+par(mfrow=c(1,3))
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+train.X1 <- data.train[,c(4:8,11:19)]
+train.y <- data.train[,3]
+test.X1 <- data.test[,c(4:8,11:19)]
+test.y <- data.test[,3]
+
+knn.pred1<-knn(train.X1, test.X1 , train.y, k=19)
+test.cr1[c]<- round(mean(knn.pred1!=test.y1)*100,4)
+}
+plot(k.knn1,test.cr1,type="l",lwd=3)
+
+```
+we can find the k is also roughly 19
+let us use 10-fold cv find the best knn model with 13 variables delete reno
+```{r}
+#use k-fold cv find the best knn model with 13 variables delete reno
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+
+test.cr1<-matrix(0)
+
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+
+train.X1 <- data.train[,c(4:8,11,13:19)]
+train.y <- data.train[,3]
+test.X1 <- data.test[,c(4:8,11,13:19)]
+test.y <- data.test[,3]
+
+knn.pred1<-knn(train.X1, test.X1 , train.y, k=19)
+test.cr1[k]<- round(mean(knn.pred1==test.y)*100,4)
+}
+m.knn1<-mean(test.cr1)
+m.knn1
+```
+I also compare the miss cr for different k's
+21.79282 k=20;21.87182 k=18 ;21.75597 k=19;21.82543 k=17;21.85588 k=16 
+The result tell us that k=19 gives us the smallest miss cr and largest correct cr.
+we can find the largest crr here is 78.24403%, which is smaller than 78.27407%(from last part)
+So, last is better, so we can choose all 14 vars.
+best model(with 14 variables) crr is 78.27407%.
+
+#another knn method 
+I use drawback method to determine the variables as lda and qda, ans just choose the one with largest ccr.
+Firstly, I established 15 models. the first one is include all 14 variables, and all other models contain 13 variables (i.e. remove one variable from the 14 at a time.)
+```{r}
+trainData$sent=as.integer(trainData$sent)
+#with 14 and 13 variables
+set.seed(7460189)
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+)
+
+model <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+
+model.1 <- train( sent~built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.2 <- train( sent~year+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.3 <- train( sent~year+built+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.4 <- train( sent~year+built+lat+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.5 <- train( sent~year+built+lat+lon+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.6 <- train(sent~year+built+lat+lon+log_sq.m.h+sq.m.pool+bedrooms+cond+reno+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.7 <- train(sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+bedrooms+cond+reno+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.8 <- train(sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+cond+reno+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.9 <- train(sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+reno+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.10 <- train(sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.11 <- train(sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.12 <- train(sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+environ+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.13 <- train(sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+environ+bathrooms+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.14 <- train(sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+environ+bathrooms+lat_lon,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+
+predictions = predict(model)
+y.hat.knn <- rep(0, nrow(trainData)/10)
+y.hat.g[predictions>=0.5]<-1
+y.hat.g[predictions<0.5]<-0
+
+
+predictions.1 = predict(model.1)
+y.hat.knn.1 <- rep(0, nrow(trainData)/10)
+y.hat.knn.1[predictions.1>=0.5]<-1
+y.hat.knn.1[predictions.1<0.5]<-0
+
+predictions.2 = predict(model.2)
+y.hat.knn.2 <- rep(0, nrow(trainData)/10)
+y.hat.knn.2[predictions.2>=0.5]<-1
+y.hat.knn.2[predictions.2<0.5]<-0
+
+predictions.3 = predict(model.3)
+y.hat.knn.3 <- rep(0, nrow(trainData)/10)
+y.hat.knn.3[predictions.3>=0.5]<-1
+y.hat.knn.3[predictions.3<0.5]<-0
+
+predictions.4 = predict(model.4)
+y.hat.knn.4 <- rep(0, nrow(trainData)/10)
+y.hat.knn.4[predictions.4>=0.5]<-1
+y.hat.knn.4[predictions.4<0.5]<-0
+
+predictions.5 = predict(model.5)
+y.hat.knn.5 <- rep(0, nrow(trainData)/10)
+y.hat.knn.5[predictions.5>=0.5]<-1
+y.hat.knn.5[predictions.5<0.5]<-0
+
+predictions.6 = predict(model.6)
+y.hat.knn.6 <- rep(0, nrow(trainData)/10)
+y.hat.knn.6[predictions.6>=0.5]<-1
+y.hat.knn.6[predictions.6<0.5]<-0
+
+predictions.7 = predict(model.7)
+y.hat.knn.7 <- rep(0, nrow(trainData)/10)
+y.hat.knn.7[predictions.7>=0.5]<-1
+y.hat.knn.7[predictions.7<0.5]<-0
+
+predictions.8 = predict(model.8)
+y.hat.knn.8 <- rep(0, nrow(trainData)/10)
+y.hat.knn.8[predictions.8>=0.5]<-1
+y.hat.knn.8[predictions.8<0.5]<-0
+
+predictions.9 = predict(model.9)
+y.hat.knn.9 <- rep(0, nrow(trainData)/10)
+y.hat.knn.9[predictions.9>=0.5]<-1
+y.hat.knn.9[predictions.9<0.5]<-0
+
+predictions.10 = predict(model.10)
+y.hat.knn.10 <- rep(0, nrow(trainData)/10)
+y.hat.knn.10[predictions.10>=0.5]<-1
+y.hat.knn.10[predictions.10<0.5]<-0
+
+predictions.11 = predict(model.11)
+y.hat.knn.11 <- rep(0, nrow(trainData)/10)
+y.hat.knn.11[predictions.11>=0.5]<-1
+y.hat.knn.11[predictions.11<0.5]<-0
+
+
+predictions.12 = predict(model.12)
+y.hat.knn.12 <- rep(0, nrow(trainData)/10)
+y.hat.knn.12[predictions.12>=0.5]<-1
+y.hat.knn.12[predictions.12<0.5]<-0
+
+predictions.13 = predict(model.13)
+y.hat.knn.13 <- rep(0, nrow(trainData)/10)
+y.hat.knn.13[predictions.13>=0.5]<-1
+y.hat.knn.13[predictions.13<0.5]<-0
+
+
+predictions.14 = predict(model.14)
+y.hat.knn.14 <- rep(0, nrow(trainData)/10)
+y.hat.knn.14[predictions.14>=0.5]<-1
+y.hat.knn.14[predictions.14<0.5]<-0
+
+cv<-round(mean(y.hat.knn==trainData$sent)*100,4)
+cv.1<-round(mean(y.hat.knn.1==trainData$sent)*100,4)
+cv.2<-round(mean(y.hat.knn.2==trainData$sent)*100,4)
+cv.3<-round(mean(y.hat.knn.3==trainData$sent)*100,4)
+cv.4<-round(mean(y.hat.knn.4==trainData$sent)*100,4)
+cv.5<-round(mean(y.hat.knn.5==trainData$sent)*100,4)
+cv.6<-round(mean(y.hat.knn.6==trainData$sent)*100,4)
+cv.7<-round(mean(y.hat.knn.7==trainData$sent)*100,4)
+cv.8<-round(mean(y.hat.knn.8==trainData$sent)*100,4)
+cv.9<-round(mean(y.hat.knn.9==trainData$sent)*100,4)
+cv.10<-round(mean(y.hat.knn.10==trainData$sent)*100,4)
+cv.11<-round(mean(y.hat.knn.11==trainData$sent)*100,4)
+cv.12<-round(mean(y.hat.knn.12==trainData$sent)*100,4)
+cv.13<-round(mean(y.hat.knn.13==trainData$sent)*100,4)
+cv.14<-round(mean(y.hat.knn.14==trainData$sent)*100,4)
+
+c(cv,cv.1,cv.2,cv.3,cv.4,cv.5,cv.6,cv.7,cv.8,cv.9,cv.10,cv.11,cv.12,cv.13,cv.14)
+```
+The output is [75.2033 83.2967 82.7600 82.6567 83.1167 82.1833 82.4467 82.9633 83.0367 83.1600 83.1867 83.5100 83.1900 83.1267 83.0300]
+we can find the largest ccr is 83.5100%, which is from model 11:
+train(sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+remove environ
+
+Then, I established 13 models,all models contain 12 variables (i.e. remove one variable from the 13 at a time.)
+```{r}
+trainData$sent=as.integer(trainData$sent)
+set.seed(7460189)
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+)
+
+model.1 <- train( sent~built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.2 <- train( sent~year+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.3 <- train( sent~year+built+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.4 <- train( sent~year+built+lat+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.5 <- train( sent~year+built+lat+lon+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.6 <- train( sent~year+built+lat+lon+log_sq.m.h+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.7 <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.8 <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.9 <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.10 <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.11 <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.12 <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+model.13 <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+
+predictions.1 = predict(model.1)
+y.hat.knn.1 <- rep(0, nrow(trainData)/10)
+y.hat.knn.1[predictions.1>=0.5]<-1
+y.hat.knn.1[predictions.1<0.5]<-0
+
+predictions.2 = predict(model.2)
+y.hat.knn.2 <- rep(0, nrow(trainData)/10)
+y.hat.knn.2[predictions.2>=0.5]<-1
+y.hat.knn.2[predictions.2<0.5]<-0
+
+predictions.3 = predict(model.3)
+y.hat.knn.3 <- rep(0, nrow(trainData)/10)
+y.hat.knn.3[predictions.3>=0.5]<-1
+y.hat.knn.3[predictions.3<0.5]<-0
+
+predictions.4 = predict(model.4)
+y.hat.knn.4 <- rep(0, nrow(trainData)/10)
+y.hat.knn.4[predictions.4>=0.5]<-1
+y.hat.knn.4[predictions.4<0.5]<-0
+
+predictions.5 = predict(model.5)
+y.hat.knn.5 <- rep(0, nrow(trainData)/10)
+y.hat.knn.5[predictions.5>=0.5]<-1
+y.hat.knn.5[predictions.5<0.5]<-0
+
+predictions.6 = predict(model.6)
+y.hat.knn.6 <- rep(0, nrow(trainData)/10)
+y.hat.knn.6[predictions.6>=0.5]<-1
+y.hat.knn.6[predictions.6<0.5]<-0
+
+predictions.7 = predict(model.7)
+y.hat.knn.7 <- rep(0, nrow(trainData)/10)
+y.hat.knn.7[predictions.7>=0.5]<-1
+y.hat.knn.7[predictions.7<0.5]<-0
+
+predictions.8 = predict(model.8)
+y.hat.knn.8 <- rep(0, nrow(trainData)/10)
+y.hat.knn.8[predictions.8>=0.5]<-1
+y.hat.knn.8[predictions.8<0.5]<-0
+
+predictions.9 = predict(model.9)
+y.hat.knn.9 <- rep(0, nrow(trainData)/10)
+y.hat.knn.9[predictions.9>=0.5]<-1
+y.hat.knn.9[predictions.9<0.5]<-0
+
+predictions.10 = predict(model.10)
+y.hat.knn.10 <- rep(0, nrow(trainData)/10)
+y.hat.knn.10[predictions.10>=0.5]<-1
+y.hat.knn.10[predictions.10<0.5]<-0
+
+predictions.11 = predict(model.11)
+y.hat.knn.11 <- rep(0, nrow(trainData)/10)
+y.hat.knn.11[predictions.11>=0.5]<-1
+y.hat.knn.11[predictions.11<0.5]<-0
+
+predictions.12 = predict(model.12)
+y.hat.knn.12 <- rep(0, nrow(trainData)/10)
+y.hat.knn.12[predictions.12>=0.5]<-1
+y.hat.knn.12[predictions.12<0.5]<-0
+
+predictions.13 = predict(model.13)
+y.hat.knn.13 <- rep(0, nrow(trainData)/10)
+y.hat.knn.13[predictions.13>=0.5]<-1
+y.hat.knn.13[predictions.13<0.5]<-0
+
+
+cv<-round(mean(y.hat.knn==trainData$sent)*100,4)
+cv.1<-round(mean(y.hat.knn.1==trainData$sent)*100,4)
+cv.2<-round(mean(y.hat.knn.2==trainData$sent)*100,4)
+cv.3<-round(mean(y.hat.knn.3==trainData$sent)*100,4)
+cv.4<-round(mean(y.hat.knn.4==trainData$sent)*100,4)
+cv.5<-round(mean(y.hat.knn.5==trainData$sent)*100,4)
+cv.6<-round(mean(y.hat.knn.6==trainData$sent)*100,4)
+cv.7<-round(mean(y.hat.knn.7==trainData$sent)*100,4)
+cv.8<-round(mean(y.hat.knn.8==trainData$sent)*100,4)
+cv.9<-round(mean(y.hat.knn.9==trainData$sent)*100,4)
+cv.10<-round(mean(y.hat.knn.10==trainData$sent)*100,4)
+cv.11<-round(mean(y.hat.knn.11==trainData$sent)*100,4)
+cv.12<-round(mean(y.hat.knn.12==trainData$sent)*100,4)
+cv.13<-round(mean(y.hat.knn.13==trainData$sent)*100,4)
+
+c(cv,cv.1,cv.2,cv.3,cv.4,cv.5,cv.6,cv.7,cv.8,cv.9,cv.10,cv.11,cv.12,cv.13)
+```
+The output is [75.2033 83.6767 82.7467 82.8300 83.5233 82.5800 82.6700 83.0267 83.1567 83.5600 83.6700 83.4800 83.5333 83.3433]
+we can find the largest ccr is 83.6767%, which is from model 2.
+So, we choose model 2:
+model.2 <- train( sent~year+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+...
+Since executing these code here would take a lot of time, according to the principle of parsimony, we should consider stopping here. Moreover, we can find that as the variables in the model decrease, the maximum value of the ccr of the models is relatively similar. At the same time, based on the previous results, we can judge that most of the variables in this model are statistically significant, and the regsubsets results also tell us that we may have the smallest BIC when 13 variables are used. So I decided to stop here and use the model which has the largest ccr 83.6767%.
+model <- train( sent~year+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+This best model have 12 variables.
+
+According to the regsubsets result early, we can just compare the models with 14 variables and 13 variables(without reno), and the one we choose before.And select a best one with largest crr.
+```{r}
+trainData$sent=as.integer(trainData$sent)
+set.seed(7460189)
+ctrl <- trainControl(
+  method = "cv",
+  number = 10,
+)
+set.seed(7460189)
+model <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center","scale"),trControl = ctrl)
+
+model.1 <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl) #without reno
+
+model.best <- train( sent~year+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+reno+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl) #without environ and built.
+
+predictions = predict(model)
+y.hat.g <- rep(0, nrow(trainData)/10)
+y.hat.g[predictions>=0.5]<-1
+y.hat.g[predictions<0.5]<-0
+
+predictions.1 = predict(model.1)
+y.hat.g.1 <- rep(0, nrow(trainData)/10)
+y.hat.g.1[predictions.1>=0.5]<-1
+y.hat.g.1[predictions.1<0.5]<-0
+
+predictions.best = predict(model.best)
+y.hat.g.b <- rep(0, nrow(trainData)/10)
+y.hat.g.b[predictions.best>=0.5]<-1
+y.hat.g.b[predictions.best<0.5]<-0
+
+
+cv<-round(mean(y.hat.g==trainData$sent)*100,4)
+cv.1<-round(mean(y.hat.g.1==trainData$sent)*100,4)
+cv.b<-round(mean(y.hat.g.b==trainData$sent)*100,4)
+
+
+c(cv,cv.1,cv.b)
+```
+The output is [83.1267 83.1867 82.7467]
+we can find that the second model has the largest crr(83.1867% ), so use the model without reno.
+In conclusion, the best knn model is model without reno.(same result as regsubsets)
+model.knn.best <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+So, the best knn models are 2.
+1,train.X1 <- data.train[,c(4:8,11:19)]
+train.y <- data.train[,3]
+test.X1 <- data.test[,c(4:8,11:19)]
+test.y <- data.test[,3]
+with crr 78.27407%.
+2,model.knn.best <- train( sent~year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+cond+environ+bathrooms+lat_lon+sq.m.h_bathrooms,data = trainData,method = 'knn',preProcess = c("center", "scale"),trControl = ctrl)
+with crr is 83.1867%
+we choose the method from the lecture, so we choose our best crr is 78.27407%.only use the other method as a reference.
+[limitation] consume too much time
+#6, tree
+establish a tree model ：
+mods_tree <- tree(as.factor(sent) ~ year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data=trainData)
+```{r}
+mods_tree <- tree(as.factor(sent) ~ year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data=trainData)
+summary(mods_tree)
+plot(mods_tree)
+text(mods_tree, pretty=0)
+```
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-3
+fold<-sample(rep(1:k, each=n/k))
+mse.stree1<-matrix(0)
+par(mfrow=c(1,3))
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+mods.tree1<-tree(as.factor(sent) ~ year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data=data.train)
+
+cv.trees1<-cv.tree(mods.tree1)
+par(mfrow=c(1,2))
+plot(cv.trees1$size,cv.trees1$dev, type="b")
+plot(cv.trees1$k, cv.trees1$dev, type="b")
+}
+```
+According to teh plot, we can find they all told that there is no need to prune the tree.
+
+use 10-fold cv calculate model.
+```{r}
+n<nrow(trainData)
+set.seed(7460189)
+k<-10
+fold<-sample(rep(1:k, each=n/k))
+cr.stree<-matrix(0)
+for(k in 1:k){
+data.train<- trainData[fold!=k,]
+data.test<-trainData[fold==k,]
+mods.tree1<-tree(as.factor(sent) ~ year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data=data.train)
+
+
+preds.tree1 <- predict(mods.tree1, newdata = data.test, type="class")
+cr.stree[k]<- round(mean(preds.tree1==data.test$sent)*100,4)
+}
+mean(cr.stree)
+```
+We can find that the best correct classification rate is 78.09874%
+limitation is mentioned as for price(they are the same)
+
+#prediction rank for the best models
+first I will list the 6 best models, and compare there correct Classification Rate.
+1, lm model: mods.lm.best<-lm(sent~year+built+lat+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+cond+environ+bathrooms+reno, data=data.train)
+2, glm model:
+mods.glm.best<-glm(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, family=binomial, data=data.train)
+3, lda model:
+lda.fit.best <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+4, qda model:
+qda.fit.best <- qda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+bathrooms+reno, data=data.train)
+5,knn model:
+train.X1 <- data.train[,c(4:8,11:19)]
+train.y <- data.train[,3]
+test.X1 <- data.test[,c(4:8,11:19)]
+test.y <- data.test[,3]
+6,tree model:
+mods.tree1<-tree(as.factor(sent) ~ year+built+lat+lon+log_sq.m.h+log_sq.m.block+sq.m.pool+bedrooms+lat_lon+sq.m.h_bathrooms+cond+reno+environ+bathrooms, data=data.train)
+1,0.7946477 2, 0.7585798 3,0.7992691 4,0.7694138 5,0.7827407 6,0.7809874
+we can find the largest ccr is from model 3 which is lda model.
+lda model:
+lda.fit.best <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+#best model
+```{r}
+lda.sent.best <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+plot(lda.sent.best)
+```
+we can find the model looks quit normal for both group.
+
+#submit to kaggle
+my score is 0.79620.
+```{r}
+#submission for A2
+lda.sent.best <- lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
+
+pred.test.s <- predict(lda.sent.best, newdata = testData,type="response")$posterior[,2] 
+
+y.hat.s <- rep(0, length(testData)) 
+y.hat.s[pred.test.s>=0.5] <- 1 
+y.hat.s[pred.test.s<0.5] <- 0 
+y.hat.s<- as.factor(y.hat.s) 
+output <- data.frame(SentData$id,y.hat.s)%>% 
+ rename(sent = y.hat.s) 
+write_csv(output, "sent_pred.csv")
+```
+
+[conclusion]
+the best prediction model for price is from lm or gam model with non linearity
+lm(price~ year+built+poly(lat,3)+poly(lon,4)+log(sq.m.h)+log(sq.m.block)+poly(sq.m.pool,5)+bedrooms+lat:lon+sq.m.h:bathrooms+cond+ns(bathrooms,df=5), data=trainData)
+the best model for predict sent is from lda model:
+lda(sent~year+built+lon+log(sq.m.h)+log(sq.m.block)+sq.m.pool+bedrooms+lat:lon+sq.m.h:bathrooms+environ+cond+lat+bathrooms, data=data.train)
